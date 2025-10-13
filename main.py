@@ -1010,8 +1010,7 @@ def generate_word(data: WordRequest, request: Request):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
-        base = str(request.base_url).rstrip("/")
-        return {"url": f"{base}/resultados/{file_id}"}
+        return {"url": f"/resultados/{file_id}"}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
@@ -1032,7 +1031,7 @@ def generate_word(data: WordRequest, request: Request):
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
-    return {"url": f"{base}/resultados/{file_id}"}
+    return {"url": f"/resultados/{file_id}"}
 
 
 @app.post("/generate_ppt")
