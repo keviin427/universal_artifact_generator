@@ -877,7 +877,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     return {"url": f"{base}/resultados/{file_id}"}
 
 @app.post("/generate_word")
-def generate_word(data: WordRequest):
+def generate_word(payload: WordAdvancedRequest, request: Request):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
@@ -1010,6 +1010,7 @@ def generate_word(data: WordRequest):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
+        base = str(request.base_url).rstrip("/")
         return {"url": f"{base}/resultados/{file_id}"}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
