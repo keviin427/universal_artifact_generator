@@ -612,6 +612,9 @@ PDF_HTML_TMPL = r"""
 </body></html>
 """
 
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/")
