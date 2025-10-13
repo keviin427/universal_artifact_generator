@@ -877,7 +877,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     return {"url": f"{base}/resultados/{file_id}"}
 
 @app.post("/generate_word")
-def generate_word(payload: WordAdvancedRequest, request: Request):
+def generate_word(data: WordRequest, request: Request):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
