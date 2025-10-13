@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pydantic
+openpyxl
+python-docx
+python-pptx
+fpdf
+pandas
+matplotlib
+scikit-learn
+numpy
+jinja2
+cairosvg
+weasyprint
