@@ -1021,7 +1021,7 @@ def generate_word(data: WordRequest):
             else:
                 # fallback
                 doc.add_paragraph(str(item))
-        
+
         # === Guardar ===
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
