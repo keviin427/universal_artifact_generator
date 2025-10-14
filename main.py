@@ -30,6 +30,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from jinja2 import Template
 from pydantic import BaseModel
+import json, ast
+from typing import Any
 
 # openpyxl (Excel)
 from openpyxl import Workbook
@@ -528,6 +530,20 @@ def _build_svg_panel(payload: Dict[str, Any], to_png: bool = False):
         png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=w, output_height=h)
     return svg, png_bytes
 
+def _coerce_json(value: Any):
+    """Convierte cadenas a objetos Python/JSON. Acepta comillas simples (literal_eval)."""
+    if isinstance(value, str):
+        # Primero intenta JSON puro
+        try:
+            return json.loads(value)
+        except Exception:
+            pass
+        # Luego intento con literal_eval (permite comillas simples estilo Python)
+        try:
+            return ast.literal_eval(value)
+        except Exception:
+            return value
+    return value
 
 PDF_HTML_TMPL = r"""
 <!doctype html>
