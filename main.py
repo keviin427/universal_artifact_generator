@@ -1069,8 +1069,7 @@ def generate_word(data: WordRequest, request: Request):
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
 
-    base = str(request.base_url).rstrip("/")
-    return {"url": f"{base}/resultados/{file_id}"}
+return {"url": f"/resultados/{file_id}"}
 
 
 
