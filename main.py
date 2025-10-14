@@ -948,79 +948,123 @@ def generate_word(data: WordRequest):
 
         # === Render del contenido con secciones/orientación cuando se requiera ===
         # Mapeo "from": "table:1", "heading:2", etc.
+                # === Render del contenido con secciones/orientación cuando se requiera ===
         sec_specs = options.get("sections", []) or []
-        # contador por tipo
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
-        for item in content:
-            typ = item.get("type", "paragraph")
-            # ¿debemos insertar break de sección antes de este ítem?
+
+        def _maybe_open_section_for(typ: str, idx_next: int):
+            """Si en options.sections hay algo como {'from':'table:2','orientation':'landscape'}
+            abre una nueva sección ANTES de insertar ese ítem."""
             for s in sec_specs:
                 src = s.get("from")
-                if src and ":" in src:
-                    t, n = src.split(":", 1)
-                    try:
-                        n = int(n)
-                    except Exception:
-                        n = None
-                    if t == typ and n == counters.get(typ, 0) + 1:
-                        # nueva sección (página nueva) con orientación indicada
-                        new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
-                        _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
-                        # heredar header/footer
-                        _set_header_footer(
-                            new_sec,
-                            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-                            options.get("footer", {"center": ""}),
-                            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
-                        )
-                        break
+                if not src or ":" not in src:
+                    continue
+                t, n = src.split(":", 1)
+                try:
+                    n = int(n)
+                except Exception:
+                    n = None
+                if t == typ and n == idx_next:
+                    new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
+                    _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
+                    _set_header_footer(
+                        new_sec,
+                        options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+                        options.get("footer", {"center": ""}),
+                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+                    )
+                    break
 
-            # ahora insertamos el elemento
-            if typ == "heading":
-                level = int(item.get("level", 1))
-                text = str(item.get("text", ""))
-                para = doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
-                counters["heading"] += 1
+        def _render_blocks(blocks):
+            for item in (blocks or []):
+                typ = item.get("type", "paragraph")
 
-            elif typ == "paragraph":
-                text = str(item.get("text", ""))
-                para = doc.add_paragraph(text, style="Normal")
-                counters["paragraph"] += 1
+                # Marcadores de alto nivel (no imprimir como texto)
+                if typ == "cover":
+                    # Ya construimos portada arriba con placeholders. Ignoramos marcador.
+                    continue
+                if typ == "toc":
+                    _insert_toc(doc)
+                    doc.add_page_break()
+                    continue
+                if typ == "header":
+                    # Permite sobreescribir header en la sección actual
+                    _set_header_footer(
+                        doc.sections[-1],
+                        {"left": item.get("left", ""), "center": item.get("center", ""), "right": item.get("right", "Página {PAGE} de {NUMPAGES}")},
+                        options.get("footer", {"center": ""}),
+                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+                    )
+                    continue
+                if typ == "footer":
+                    _set_header_footer(
+                        doc.sections[-1],
+                        options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+                        {"left": item.get("left",""), "center": item.get("center",""), "right": item.get("right","")},
+                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+                    )
+                    continue
+                if typ == "section":
+                    # Sección compuesta: título + lista interna de bloques
+                    title = item.get("title") or item.get("name") or ""
+                    if title:
+                        _maybe_open_section_for("heading", counters["heading"] + 1)
+                        doc.add_paragraph(str(title), style="Heading 1")
+                        counters["heading"] += 1
+                    _render_blocks(item.get("content") or [])
+                    continue
 
-            elif typ == "table":
-                _render_table(doc, item)
-                counters["table"] += 1
+                # Apertura de sección condicional para el próximo índice de este tipo
+                _maybe_open_section_for(typ, counters.get(typ, 0) + 1)
 
-            elif typ == "list":
-                items = item.get("items", [])
-                ordered = bool(item.get("ordered", False))
-                style = "List Number" if ordered else "List Bullet"
-                for it in items:
-                    p = doc.add_paragraph(str(it), style=style)
-                counters["list"] += 1
+                # Tipos “atómicos”
+                if typ == "heading":
+                    level = int(item.get("level", 1))
+                    text = str(item.get("text", ""))
+                    doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
+                    counters["heading"] += 1
 
-            elif typ == "image":
-                # admite url o base64
-                width_in = float(item.get("width_in", 5))
-                if item.get("image_b64"):
-                    try:
-                        img = io.BytesIO(b64decode(item["image_b64"]))
-                        doc.add_picture(img, width=DocxInches(width_in))
-                    except Exception:
-                        pass
-                elif item.get("url") and (item["url"].startswith("http://") or item["url"].startswith("https://")):
-                    try:
-                        with urllib.request.urlopen(item["url"]) as resp:
-                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                            tmp.write(resp.read()); tmp.flush()
-                            doc.add_picture(tmp.name, width=DocxInches(width_in))
-                    except Exception:
-                        pass
-                counters["image"] += 1
+                elif typ == "paragraph":
+                    text = str(item.get("text", ""))
+                    doc.add_paragraph(text, style="Normal")
+                    counters["paragraph"] += 1
 
-            else:
-                # fallback
-                doc.add_paragraph(str(item))
+                elif typ == "table":
+                    _render_table(doc, item)
+                    counters["table"] += 1
+
+                elif typ == "list":
+                    items = item.get("items", [])
+                    ordered = bool(item.get("ordered", False))
+                    style = "List Number" if ordered else "List Bullet"
+                    for it in items:
+                        doc.add_paragraph(str(it), style=style)
+                    counters["list"] += 1
+
+                elif typ == "image":
+                    width_in = float(item.get("width_in", 5))
+                    if item.get("image_b64"):
+                        try:
+                            img = io.BytesIO(b64decode(item["image_b64"]))
+                            doc.add_picture(img, width=DocxInches(width_in))
+                        except Exception:
+                            pass
+                    elif item.get("url") and (item["url"].startswith("http://") or item["url"].startswith("https://")):
+                        try:
+                            with urllib.request.urlopen(item["url"]) as resp:
+                                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                                tmp.write(resp.read()); tmp.flush()
+                                doc.add_picture(tmp.name, width=DocxInches(width_in))
+                        except Exception:
+                            pass
+                    counters["image"] += 1
+
+                else:
+                    # Tipo desconocido → ignorar (ya no imprimimos el dict como texto)
+                    continue
+
+        _render_blocks(content)
+
 
         # === Guardar ===
         file_id = f"{uuid.uuid4()}.docx"
