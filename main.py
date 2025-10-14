@@ -893,13 +893,8 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     return {"url": f"/resultados/{file_id}"}
 
 @app.post("/generate_word")
-def generate_word(data: WordRequest, request: Request):
-    """
-    Genera un .docx. Si vienen content/placeholders/options/template_id -> modo avanzado;
-    si no, usa el modo legado (titulo/secciones/tablas).
-    """
-
-    # === MODO AVANZADO ===
+def generate_word(data: WordRequest):
+    # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
@@ -907,7 +902,7 @@ def generate_word(data: WordRequest, request: Request):
 
         doc = Document()
 
-        # ---- Portada (placeholders) ----
+        # === Portada (si hay placeholders) ===
         titulo = placeholders.get("titulo") or "Documento"
         subtitulo = placeholders.get("subtitulo") or ""
         autor = placeholders.get("autor") or ""
@@ -915,15 +910,12 @@ def generate_word(data: WordRequest, request: Request):
 
         ptitle = doc.add_paragraph()
         ptitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = ptitle.add_run(titulo)
-        run.bold = True
-        run.font.size = DocxPt(24)
+        r = ptitle.add_run(titulo); r.bold = True; r.font.size = DocxPt(24)
 
         if subtitulo:
             ps = doc.add_paragraph()
             ps.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            rs = ps.add_run(subtitulo)
-            rs.font.size = DocxPt(14)
+            rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
         meta = []
         if autor: meta.append(autor)
@@ -935,36 +927,33 @@ def generate_word(data: WordRequest, request: Request):
 
         doc.add_page_break()
 
-        # ---- TOC opcional ----
+        # === TOC opcional ===
         if options.get("toc", False):
             _insert_toc(doc)
             doc.add_page_break()
 
-        # ---- Encabezado/Pie + Logo/Watermark en TODAS las secciones ----
+        # === Encabezado/Pie + Logo/Watermark en TODAS las secciones ===
         logo_url = placeholders.get("logo_url")
         logo_b64 = placeholders.get("logo_b64")
-        wm_text = None
+        wm = None
         wm_cfg = options.get("watermark")
         if isinstance(wm_cfg, dict):
-            wm_text = wm_cfg.get("text")
-
+            wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
             options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
             options.get("footer", {"center": ""}),
-            logo_url=logo_url,
-            logo_b64=logo_b64,
-            watermark_text=wm_text,
+            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
-        # ---- Secciones con orientación condicional ----
+        # === Render del contenido con secciones/orientación cuando se requiera ===
+        # Mapeo "from": "table:1", "heading:2", etc.
         sec_specs = options.get("sections", []) or []
+        # contador por tipo
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
-
         for item in content:
             typ = item.get("type", "paragraph")
-
-            # ¿Insertar salto de sección antes de este ítem?
+            # ¿debemos insertar break de sección antes de este ítem?
             for s in sec_specs:
                 src = s.get("from")
                 if src and ":" in src:
@@ -974,28 +963,28 @@ def generate_word(data: WordRequest, request: Request):
                     except Exception:
                         n = None
                     if t == typ and n == counters.get(typ, 0) + 1:
+                        # nueva sección (página nueva) con orientación indicada
                         new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
                         _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
+                        # heredar header/footer
                         _set_header_footer(
                             new_sec,
                             options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
                             options.get("footer", {"center": ""}),
-                            logo_url=logo_url,
-                            logo_b64=logo_b64,
-                            watermark_text=wm_text,
+                            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
                         )
                         break
 
-            # Render del ítem
+            # ahora insertamos el elemento
             if typ == "heading":
                 level = int(item.get("level", 1))
                 text = str(item.get("text", ""))
-                doc.add_paragraph(text, style=f"Heading {min(max(level, 1), 3)}")
+                para = doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
                 counters["heading"] += 1
 
             elif typ == "paragraph":
                 text = str(item.get("text", ""))
-                doc.add_paragraph(text, style="Normal")
+                para = doc.add_paragraph(text, style="Normal")
                 counters["paragraph"] += 1
 
             elif typ == "table":
@@ -1007,10 +996,11 @@ def generate_word(data: WordRequest, request: Request):
                 ordered = bool(item.get("ordered", False))
                 style = "List Number" if ordered else "List Bullet"
                 for it in items:
-                    doc.add_paragraph(str(it), style=style)
+                    p = doc.add_paragraph(str(it), style=style)
                 counters["list"] += 1
 
             elif typ == "image":
+                # admite url o base64
                 width_in = float(item.get("width_in", 5))
                 if item.get("image_b64"):
                     try:
@@ -1022,54 +1012,42 @@ def generate_word(data: WordRequest, request: Request):
                     try:
                         with urllib.request.urlopen(item["url"]) as resp:
                             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                            tmp.write(resp.read())
-                            tmp.flush()
+                            tmp.write(resp.read()); tmp.flush()
                             doc.add_picture(tmp.name, width=DocxInches(width_in))
                     except Exception:
                         pass
                 counters["image"] += 1
 
             else:
-                # Tipo desconocido -> lo omitimos para no volcar JSON crudo en el documento
-                continue
-
-        # ---- Guardar ----
+                # fallback
+                doc.add_paragraph(str(item))
+        
+        # === Guardar ===
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
+        return {"url": f"/resultados/{file_id}"}
 
-        base = str(request.base_url).rstrip("/")
-        return {"url": f"{base}/resultados/{file_id}"}
-
-    # === MODO LEGADO (título, secciones, tablas) ===
-    # Convertimos a dict si llega como pydantic model y sanitizamos.
-    payload = data.dict() if hasattr(data, "dict") else (data or {})
-    payload = sanitize(payload)
-
+    # ===== MODO LEGADO (tu comportamiento anterior) =====
+    data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
-    doc.add_heading(payload.get("titulo") or "Documento", 0)
-
-    for sec in (payload.get("secciones") or []):
-        doc.add_paragraph(str(sec))
-
-    if payload.get("tablas"):
-        for tabla in payload["tablas"]:
-            if not tabla:
-                continue
+    doc.add_heading(data["titulo"], 0)
+    for sec in data["secciones"]:
+        doc.add_paragraph(sec)
+    if data.get("tablas"):
+        for tabla in data["tablas"]:
             t = doc.add_table(rows=1, cols=len(tabla[0]))
             hdr_cells = t.rows[0].cells
             for i, h in enumerate(tabla[0]):
-                hdr_cells[i].text = str(h)
+                hdr_cells[i].text = h
             for row in tabla[1:]:
                 row_cells = t.add_row().cells
                 for i, cell in enumerate(row):
-                    row_cells[i].text = str(cell)
-
+                    row_cells[i].text = cell
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
-
-return {"url": f"/resultados/{file_id}"}
+    return {"url": f"/resultados/{file_id}"}
 
 
 
