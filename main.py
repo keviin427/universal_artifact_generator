@@ -71,7 +71,21 @@ try:
 except Exception:
     cairosvg = None
 
+COMPANY_NAME = os.getenv("COMPANY_NAME", "AuditConsulting Group")
+# Cambia este URL por el de tu logo corporativo (o usa una ENV var COMPANY_LOGO_URL en Render)
+COMPANY_LOGO_URL = os.getenv(
+    "COMPANY_LOGO_URL",
+    "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"  # <--- REEMPLÁZALO
+)
 
+DEFAULT_BRAND = {
+    "primary": "#112B49",
+    "secondary": "#E6EEF8",
+    "accent": "#F5A623",
+    "title_font": "Calibri Light",
+    "body_font": "Calibri",
+    "logo_url": COMPANY_LOGO_URL
+}
 
 def clean_text(text):
     if isinstance(text, str):
@@ -895,6 +909,38 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 @app.post("/generate_word")
 def generate_word(data: WordRequest):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
+    brand_payload = (data.get("options") or {}).get("brand") or (data.get("placeholders") or {}).get("brand")
+brand = _merge_brand(brand_payload)
+
+# autor y compañia
+try:
+    doc.core_properties.author = COMPANY_NAME
+    doc.core_properties.company = COMPANY_NAME
+except Exception:
+    pass
+
+# Encabezado/Pie por defecto (si el payload no los trae)
+opts = data.get("options") or {}
+hdr_conf = (opts.get("header") or {})
+ftr_conf = (opts.get("footer") or {})
+
+left_hdr = hdr_conf.get("left") or COMPANY_NAME
+right_hdr = hdr_conf.get("right") or "Página {PAGE} de {NUMPAGES}"
+center_ftr = ftr_conf.get("center") or f"© {date.today().year} {COMPANY_NAME}"
+
+_set_header_footer(
+    doc,
+    header_left=left_hdr,
+    header_right=right_hdr,
+    footer_center=center_ftr
+)
+
+# Portada/logo por defecto si usas plantilla o portada generada
+# Si ya tienes lógica de portada/placeholder logo_url, asegura fallback:
+placeholders = data.get("placeholders") or {}
+if "logo_url" not in placeholders or not placeholders.get("logo_url"):
+    placeholders["logo_url"] = brand.get("logo_url")
+data["placeholders"] = placeholders
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
@@ -1378,6 +1424,21 @@ def generate_pdf(data: PDFRequest):
         with open(file_path, "wb") as f:
             f.write(pdf_bytes)
         return {"url": f"/resultados/{file_id}"}
+# dentro de build_pdf(payload) o generate_pdf(...)
+brand = _merge_brand((payload.get("brand") if 'payload' in locals() else (data.get("brand") if 'data' in locals() else None)))
+footer_text = payload.get("options", {}).get("footer_text") if 'payload' in locals() else (data.get("options", {}).get("footer_text") if 'data' in locals() else "")
+if not footer_text:
+    footer_text = f"© {date.today().year} {COMPANY_NAME}"
+
+html = Template(HTML_TMPL).render(
+    page_size=payload.get("options",{}).get("page_size","A4") if 'payload' in locals() else data.get("options",{}).get("page_size","A4"),
+    footer_text=footer_text,
+    primary=brand.get("primary","#0F766E"),
+    logo_url=brand.get("logo_url") or COMPANY_LOGO_URL,
+    title=payload.get("title","Informe") if 'payload' in locals() else data.get("title","Informe"),
+    meta=payload.get("meta",{}) if 'payload' in locals() else data.get("meta",{}),
+    sections=payload.get("sections",[]) if 'payload' in locals() else data.get("sections",[])
+)
 
     # ====== MODO LEGADO (tu FPDF actual) ======
     data = sanitize(data.dict())
@@ -1418,6 +1479,23 @@ def generate_canva(data: CanvaRequest):
                 f.write(png_bytes)
             resp["url_png"] = f"/resultados/{png_id}"
         return resp
+# dentro de build_svg(...)
+brand = _merge_brand(payload.get("theme"))
+logo_url = brand.get("logo_url") or COMPANY_LOGO_URL
+title = payload.get("title") or f"Panel de Auditoría – {COMPANY_NAME}"
+
+# añade el logo (opcional) arriba a la izquierda
+logo_tag = f'<image href="{logo_url}" x="48" y="24" height="40"/>' if logo_url else ""
+
+svg = SVG_TMPL.format(
+    w=w, h=h,
+    bg=bg, text=text, primary=primary,
+    title=safe(title),
+    kpi_cards=kpi_cards,
+    bullet_list=bullet_list
+)
+# Inserta el logo_tag justo después del rect de fondo:
+svg = svg.replace("<text x=\"48\" y=\"80\"", f"{logo_tag}\n  <text x=\"48\" y=\"80\"")
 
     # --- modo legado (tu comportamiento anterior) ---
     data = sanitize(data.dict())
