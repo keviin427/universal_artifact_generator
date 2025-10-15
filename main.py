@@ -87,6 +87,12 @@ DEFAULT_BRAND = {
     "logo_url": COMPANY_LOGO_URL
 }
 
+def _merge_brand(payload_brand: dict | None):
+    base = DEFAULT_BRAND.copy()
+    if payload_brand:
+        base.update({k: v for k, v in payload_brand.items() if v is not None})
+    return base
+
 def clean_text(text):
     if isinstance(text, str):
         return re.sub(r"[^\w\s\-.,()#]", "", text)
