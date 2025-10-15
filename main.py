@@ -98,6 +98,42 @@ def clean_text(text):
         return re.sub(r"[^\w\s\-.,()#]", "", text)
     return text
 
+def _render_cover(doc, placeholders: dict, brand: dict):
+    """Crea una portada simple centrada con título/subtítulo/autor/fecha."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt as DocxPt
+
+    titulo = placeholders.get("titulo") or "Documento"
+    subtitulo = placeholders.get("subtitulo") or ""
+    autor = placeholders.get("autor") or ""
+    fecha = placeholders.get("fecha") or ""
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run(titulo)
+    r.bold = True
+    r.font.size = DocxPt(26)
+
+    if subtitulo:
+        p2 = doc.add_paragraph()
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r2 = p2.add_run(subtitulo)
+        r2.font.size = DocxPt(14)
+
+    meta = []
+    if autor:
+        meta.append(autor)
+    if fecha:
+        meta.append(fecha)
+    if meta:
+        p3 = doc.add_paragraph()
+        p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r3 = p3.add_run(" – ".join(meta))
+        r3.italic = True
+
+    # salto de página tras portada
+    doc.add_page_break()
+
 
 def sanitize(data):
     if isinstance(data, dict):
@@ -914,222 +950,175 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 
 @app.post("/generate_word")
 def generate_word(data: WordRequest):
-    # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
-    brand_payload = (data.get("options") or {}).get("brand") or (data.get("placeholders") or {}).get("brand")
-brand = _merge_brand(brand_payload)
+    """
+    Modo AVANZADO si viene cualquiera de: template_id / content / placeholders / options.
+    Si no, cae al modo LEGADO (título, secciones, tablas).
+    """
+    # ---------- MODO AVANZADO ----------
+    if data.template_id or data.content or data.placeholders or data.options:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt as DocxPt, Inches as DocxInches
+        from docx.enum.section import WD_SECTION_START
+        import io, tempfile, urllib.request, uuid, os
+        from base64 import b64decode
 
-# autor y compañia
-try:
-    doc.core_properties.author = COMPANY_NAME
-    doc.core_properties.company = COMPANY_NAME
-except Exception:
-    pass
-
-# Encabezado/Pie por defecto (si el payload no los trae)
-opts = data.get("options") or {}
-hdr_conf = (opts.get("header") or {})
-ftr_conf = (opts.get("footer") or {})
-
-left_hdr = hdr_conf.get("left") or COMPANY_NAME
-right_hdr = hdr_conf.get("right") or "Página {PAGE} de {NUMPAGES}"
-center_ftr = ftr_conf.get("center") or f"© {date.today().year} {COMPANY_NAME}"
-
-_set_header_footer(
-    doc,
-    header_left=left_hdr,
-    header_right=right_hdr,
-    footer_center=center_ftr
-)
-
-# Portada/logo por defecto si usas plantilla o portada generada
-# Si ya tienes lógica de portada/placeholder logo_url, asegura fallback:
-placeholders = data.get("placeholders") or {}
-if "logo_url" not in placeholders or not placeholders.get("logo_url"):
-    placeholders["logo_url"] = brand.get("logo_url")
-data["placeholders"] = placeholders
-    if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
-        content = data.content or []
+        content = list(data.content or [])
+
+        # Branding (usa tus helpers/constantes existentes)
+        brand_payload = (options.get("brand") or {}) or (placeholders.get("brand") or {})
+        brand = _merge_brand(brand_payload)
 
         doc = Document()
 
-        # === Portada (si hay placeholders) ===
-        titulo = placeholders.get("titulo") or "Documento"
-        subtitulo = placeholders.get("subtitulo") or ""
-        autor = placeholders.get("autor") or ""
-        fecha = placeholders.get("fecha") or ""
+        # Propiedades
+        try:
+            doc.core_properties.author = COMPANY_NAME
+            doc.core_properties.company = COMPANY_NAME
+        except Exception:
+            pass
 
-        ptitle = doc.add_paragraph()
-        ptitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = ptitle.add_run(titulo); r.bold = True; r.font.size = DocxPt(24)
+        # Encabezado/pie por defecto (si no lo definen en un bloque 'header'/'footer')
+        hdr_conf = options.get("header") or {}
+        ftr_conf = options.get("footer") or {}
 
-        if subtitulo:
-            ps = doc.add_paragraph()
-            ps.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
+        left_hdr  = hdr_conf.get("left")  or COMPANY_NAME
+        right_hdr = hdr_conf.get("right") or "Página {PAGE} de {NUMPAGES}"
+        center_ftr = ftr_conf.get("center") or f"© {date.today().year} {COMPANY_NAME}"
 
-        meta = []
-        if autor: meta.append(autor)
-        if fecha: meta.append(fecha)
-        if meta:
-            pm = doc.add_paragraph()
-            pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            pm.add_run(" – ".join(meta)).italic = True
-
-        doc.add_page_break()
-
-        # === TOC opcional ===
-        if options.get("toc", False):
-            _insert_toc(doc)
-            doc.add_page_break()
-
-        # === Encabezado/Pie + Logo/Watermark en TODAS las secciones ===
-        logo_url = placeholders.get("logo_url")
-        logo_b64 = placeholders.get("logo_b64")
-        wm = None
-        wm_cfg = options.get("watermark")
-        if isinstance(wm_cfg, dict):
-            wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
-            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-            options.get("footer", {"center": ""}),
-            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+            {"left": left_hdr, "right": right_hdr},
+            {"center": center_ftr},
+            logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
+            logo_b64=placeholders.get("logo_b64"),
+            watermark_text=(options.get("watermark") or {}).get("text")
         )
 
-        # === Render del contenido con secciones/orientación cuando se requiera ===
-        # Mapeo "from": "table:1", "heading:2", etc.
-                # === Render del contenido con secciones/orientación cuando se requiera ===
+        # Reglas de secciones/orientación (si las usas)
         sec_specs = options.get("sections", []) or []
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
 
-        def _maybe_open_section_for(typ: str, idx_next: int):
-            """Si en options.sections hay algo como {'from':'table:2','orientation':'landscape'}
-            abre una nueva sección ANTES de insertar ese ítem."""
+        # Recorre el contenido
+        for item in content:
+            t = (item.get("type") or "paragraph").lower()
+
+            # ¿cambio de sección antes del ítem?
             for s in sec_specs:
                 src = s.get("from")
                 if not src or ":" not in src:
                     continue
-                t, n = src.split(":", 1)
+                typ, num = src.split(":", 1)
                 try:
-                    n = int(n)
+                    num = int(num)
                 except Exception:
-                    n = None
-                if t == typ and n == idx_next:
+                    num = None
+                if typ == t and num == counters.get(t, 0) + 1:
                     new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
                     _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
+                    # hereda header/footer
                     _set_header_footer(
                         new_sec,
-                        options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-                        options.get("footer", {"center": ""}),
-                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+                        {"left": left_hdr, "right": right_hdr},
+                        {"center": center_ftr},
+                        logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
+                        logo_b64=placeholders.get("logo_b64"),
+                        watermark_text=(options.get("watermark") or {}).get("text")
                     )
                     break
 
-        def _render_blocks(blocks):
-            for item in (blocks or []):
-                typ = item.get("type", "paragraph")
+            # Render según tipo
+            if t == "cover":
+                _render_cover(doc, placeholders, brand)
 
-                # Marcadores de alto nivel (no imprimir como texto)
-                if typ == "cover":
-                    # Ya construimos portada arriba con placeholders. Ignoramos marcador.
-                    continue
-                if typ == "toc":
-                    _insert_toc(doc)
-                    doc.add_page_break()
-                    continue
-                if typ == "header":
-                    # Permite sobreescribir header en la sección actual
-                    _set_header_footer(
-                        doc.sections[-1],
-                        {"left": item.get("left", ""), "center": item.get("center", ""), "right": item.get("right", "Página {PAGE} de {NUMPAGES}")},
-                        options.get("footer", {"center": ""}),
-                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
-                    )
-                    continue
-                if typ == "footer":
-                    _set_header_footer(
-                        doc.sections[-1],
-                        options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-                        {"left": item.get("left",""), "center": item.get("center",""), "right": item.get("right","")},
-                        logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
-                    )
-                    continue
-                if typ == "section":
-                    # Sección compuesta: título + lista interna de bloques
-                    title = item.get("title") or item.get("name") or ""
-                    if title:
-                        _maybe_open_section_for("heading", counters["heading"] + 1)
-                        doc.add_paragraph(str(title), style="Heading 1")
-                        counters["heading"] += 1
-                    _render_blocks(item.get("content") or [])
-                    continue
+            elif t == "toc":
+                _insert_toc(doc)
+                doc.add_page_break()
 
-                # Apertura de sección condicional para el próximo índice de este tipo
-                _maybe_open_section_for(typ, counters.get(typ, 0) + 1)
+            elif t == "header":
+                # Permite sobreescribir header a mitad del doc
+                lh = item.get("left", left_hdr)
+                rh = item.get("right", right_hdr)
+                _set_header_footer(
+                    doc.sections[-1],
+                    {"left": lh, "right": rh},
+                    {"center": center_ftr},
+                    logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
+                    logo_b64=placeholders.get("logo_b64"),
+                    watermark_text=(options.get("watermark") or {}).get("text")
+                )
 
-                # Tipos “atómicos”
-                if typ == "heading":
-                    level = int(item.get("level", 1))
-                    text = str(item.get("text", ""))
-                    doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
-                    counters["heading"] += 1
+            elif t == "footer":
+                cf = item.get("center", center_ftr)
+                _set_header_footer(
+                    doc.sections[-1],
+                    {"left": left_hdr, "right": right_hdr},
+                    {"center": cf},
+                    logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
+                    logo_b64=placeholders.get("logo_b64"),
+                    watermark_text=(options.get("watermark") or {}).get("text")
+                )
 
-                elif typ == "paragraph":
-                    text = str(item.get("text", ""))
-                    doc.add_paragraph(text, style="Normal")
-                    counters["paragraph"] += 1
+            elif t == "heading":
+                level = int(item.get("level", 1))
+                txt = str(item.get("text", ""))
+                doc.add_paragraph(txt, style=f"Heading {min(max(level,1),3)}")
+                counters["heading"] += 1
 
-                elif typ == "table":
-                    _render_table(doc, item)
-                    counters["table"] += 1
+            elif t == "paragraph":
+                txt = str(item.get("text", ""))
+                doc.add_paragraph(txt, style="Normal")
+                counters["paragraph"] += 1
 
-                elif typ == "list":
-                    items = item.get("items", [])
-                    ordered = bool(item.get("ordered", False))
-                    style = "List Number" if ordered else "List Bullet"
-                    for it in items:
-                        doc.add_paragraph(str(it), style=style)
-                    counters["list"] += 1
+            elif t == "table":
+                _render_table(doc, item)
+                counters["table"] += 1
 
-                elif typ == "image":
-                    width_in = float(item.get("width_in", 5))
-                    if item.get("image_b64"):
-                        try:
-                            img = io.BytesIO(b64decode(item["image_b64"]))
-                            doc.add_picture(img, width=DocxInches(width_in))
-                        except Exception:
-                            pass
-                    elif item.get("url") and (item["url"].startswith("http://") or item["url"].startswith("https://")):
-                        try:
-                            with urllib.request.urlopen(item["url"]) as resp:
-                                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                                tmp.write(resp.read()); tmp.flush()
-                                doc.add_picture(tmp.name, width=DocxInches(width_in))
-                        except Exception:
-                            pass
-                    counters["image"] += 1
+            elif t == "list":
+                items = item.get("items", [])
+                ordered = bool(item.get("ordered", False))
+                style = "List Number" if ordered else "List Bullet"
+                for it in items:
+                    doc.add_paragraph(str(it), style=style)
+                counters["list"] += 1
 
-                else:
-                    # Tipo desconocido → ignorar (ya no imprimimos el dict como texto)
-                    continue
+            elif t == "image":
+                width_in = float(item.get("width_in", 5))
+                if item.get("image_b64"):
+                    try:
+                        img = io.BytesIO(b64decode(item["image_b64"]))
+                        doc.add_picture(img, width=DocxInches(width_in))
+                    except Exception:
+                        pass
+                elif item.get("url") and item["url"].startswith(("http://", "https://")):
+                    try:
+                        with urllib.request.urlopen(item["url"]) as resp:
+                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                            tmp.write(resp.read()); tmp.flush()
+                            doc.add_picture(tmp.name, width=DocxInches(width_in))
+                    except Exception:
+                        pass
+                counters["image"] += 1
 
-        _render_blocks(content)
+            else:
+                # Si llega un tipo desconocido, lo ignoramos (no lo metemos como texto)
+                pass
 
-
-        # === Guardar ===
+        # Guardar
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
         return {"url": f"/resultados/{file_id}"}
 
-    # ===== MODO LEGADO (tu comportamiento anterior) =====
-    data = sanitize(data.dict())  # aquí sí sanitizamos como antes
+    # ---------- MODO LEGADO ----------
+    data = sanitize(data.dict())
     doc = Document()
     doc.add_heading(data["titulo"], 0)
-    for sec in data["secciones"]:
+    for sec in data.get("secciones") or []:
         doc.add_paragraph(sec)
+
     if data.get("tablas"):
         for tabla in data["tablas"]:
             t = doc.add_table(rows=1, cols=len(tabla[0]))
@@ -1140,6 +1129,7 @@ data["placeholders"] = placeholders
                 row_cells = t.add_row().cells
                 for i, cell in enumerate(row):
                     row_cells[i].text = cell
+
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
