@@ -70,29 +70,7 @@ try:
     import cairosvg  # opcional (para exportar PNG desde SVG)
 except Exception:
     cairosvg = None
-
-COMPANY_NAME = os.getenv("COMPANY_NAME", "AuditConsulting Group")
-# Cambia este URL por el de tu logo corporativo (o usa una ENV var COMPANY_LOGO_URL en Render)
-COMPANY_LOGO_URL = os.getenv(
-    "COMPANY_LOGO_URL",
-    "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"  # <--- REEMPLÁZALO
-)
-
-DEFAULT_BRAND = {
-    "primary": "#112B49",
-    "secondary": "#E6EEF8",
-    "accent": "#F5A623",
-    "title_font": "Calibri Light",
-    "body_font": "Calibri",
-    "logo_url": COMPANY_LOGO_URL
-}
-
-def _merge_brand(payload_brand: dict | None):
-    base = DEFAULT_BRAND.copy()
-    if payload_brand:
-        base.update({k: v for k, v in payload_brand.items() if v is not None})
-    return base
-
+    
 def clean_text(text):
     if isinstance(text, str):
         return re.sub(r"[^\w\s\-.,()#]", "", text)
@@ -950,141 +928,113 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 
 @app.post("/generate_word")
 def generate_word(data: WordRequest):
-    """
-    Modo AVANZADO si viene cualquiera de: template_id / content / placeholders / options.
-    Si no, cae al modo LEGADO (título, secciones, tablas).
-    """
-    # ---------- MODO AVANZADO ----------
-    if data.template_id or data.content or data.placeholders or data.options:
-        from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Pt as DocxPt, Inches as DocxInches
-        from docx.enum.section import WD_SECTION_START
-        import io, tempfile, urllib.request, uuid, os
-        from base64 import b64decode
-
+    # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
+    if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
-        content = list(data.content or [])
-
-        # Branding (usa tus helpers/constantes existentes)
-        brand_payload = (options.get("brand") or {}) or (placeholders.get("brand") or {})
-        brand = _merge_brand(brand_payload)
+        content = data.content or []
 
         doc = Document()
 
-        # Propiedades
-        try:
-            doc.core_properties.author = COMPANY_NAME
-            doc.core_properties.company = COMPANY_NAME
-        except Exception:
-            pass
+        # === Portada (si hay placeholders) ===
+        titulo = placeholders.get("titulo") or "Documento"
+        subtitulo = placeholders.get("subtitulo") or ""
+        autor = placeholders.get("autor") or ""
+        fecha = placeholders.get("fecha") or ""
 
-        # Encabezado/pie por defecto (si no lo definen en un bloque 'header'/'footer')
-        hdr_conf = options.get("header") or {}
-        ftr_conf = options.get("footer") or {}
+        ptitle = doc.add_paragraph()
+        ptitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = ptitle.add_run(titulo); r.bold = True; r.font.size = DocxPt(24)
 
-        left_hdr  = hdr_conf.get("left")  or COMPANY_NAME
-        right_hdr = hdr_conf.get("right") or "Página {PAGE} de {NUMPAGES}"
-        center_ftr = ftr_conf.get("center") or f"© {date.today().year} {COMPANY_NAME}"
+        if subtitulo:
+            ps = doc.add_paragraph()
+            ps.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
+        meta = []
+        if autor: meta.append(autor)
+        if fecha: meta.append(fecha)
+        if meta:
+            pm = doc.add_paragraph()
+            pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pm.add_run(" – ".join(meta)).italic = True
+
+        doc.add_page_break()
+
+        # === TOC opcional ===
+        if options.get("toc", False):
+            _insert_toc(doc)
+            doc.add_page_break()
+
+        # === Encabezado/Pie + Logo/Watermark en TODAS las secciones ===
+        logo_url = placeholders.get("logo_url")
+        logo_b64 = placeholders.get("logo_b64")
+        wm = None
+        wm_cfg = options.get("watermark")
+        if isinstance(wm_cfg, dict):
+            wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
-            {"left": left_hdr, "right": right_hdr},
-            {"center": center_ftr},
-            logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
-            logo_b64=placeholders.get("logo_b64"),
-            watermark_text=(options.get("watermark") or {}).get("text")
+            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+            options.get("footer", {"center": ""}),
+            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
-        # Reglas de secciones/orientación (si las usas)
+        # === Render del contenido con secciones/orientación cuando se requiera ===
+        # Mapeo "from": "table:1", "heading:2", etc.
         sec_specs = options.get("sections", []) or []
+        # contador por tipo
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
-
-        # Recorre el contenido
         for item in content:
-            t = (item.get("type") or "paragraph").lower()
-
-            # ¿cambio de sección antes del ítem?
+            typ = item.get("type", "paragraph")
+            # ¿debemos insertar break de sección antes de este ítem?
             for s in sec_specs:
                 src = s.get("from")
-                if not src or ":" not in src:
-                    continue
-                typ, num = src.split(":", 1)
-                try:
-                    num = int(num)
-                except Exception:
-                    num = None
-                if typ == t and num == counters.get(t, 0) + 1:
-                    new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
-                    _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
-                    # hereda header/footer
-                    _set_header_footer(
-                        new_sec,
-                        {"left": left_hdr, "right": right_hdr},
-                        {"center": center_ftr},
-                        logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
-                        logo_b64=placeholders.get("logo_b64"),
-                        watermark_text=(options.get("watermark") or {}).get("text")
-                    )
-                    break
+                if src and ":" in src:
+                    t, n = src.split(":", 1)
+                    try:
+                        n = int(n)
+                    except Exception:
+                        n = None
+                    if t == typ and n == counters.get(typ, 0) + 1:
+                        # nueva sección (página nueva) con orientación indicada
+                        new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
+                        _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
+                        # heredar header/footer
+                        _set_header_footer(
+                            new_sec,
+                            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+                            options.get("footer", {"center": ""}),
+                            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
+                        )
+                        break
 
-            # Render según tipo
-            if t == "cover":
-                _render_cover(doc, placeholders, brand)
-
-            elif t == "toc":
-                _insert_toc(doc)
-                doc.add_page_break()
-
-            elif t == "header":
-                # Permite sobreescribir header a mitad del doc
-                lh = item.get("left", left_hdr)
-                rh = item.get("right", right_hdr)
-                _set_header_footer(
-                    doc.sections[-1],
-                    {"left": lh, "right": rh},
-                    {"center": center_ftr},
-                    logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
-                    logo_b64=placeholders.get("logo_b64"),
-                    watermark_text=(options.get("watermark") or {}).get("text")
-                )
-
-            elif t == "footer":
-                cf = item.get("center", center_ftr)
-                _set_header_footer(
-                    doc.sections[-1],
-                    {"left": left_hdr, "right": right_hdr},
-                    {"center": cf},
-                    logo_url=placeholders.get("logo_url") or brand.get("logo_url"),
-                    logo_b64=placeholders.get("logo_b64"),
-                    watermark_text=(options.get("watermark") or {}).get("text")
-                )
-
-            elif t == "heading":
+            # ahora insertamos el elemento
+            if typ == "heading":
                 level = int(item.get("level", 1))
-                txt = str(item.get("text", ""))
-                doc.add_paragraph(txt, style=f"Heading {min(max(level,1),3)}")
+                text = str(item.get("text", ""))
+                para = doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
                 counters["heading"] += 1
 
-            elif t == "paragraph":
-                txt = str(item.get("text", ""))
-                doc.add_paragraph(txt, style="Normal")
+            elif typ == "paragraph":
+                text = str(item.get("text", ""))
+                para = doc.add_paragraph(text, style="Normal")
                 counters["paragraph"] += 1
 
-            elif t == "table":
+            elif typ == "table":
                 _render_table(doc, item)
                 counters["table"] += 1
 
-            elif t == "list":
+            elif typ == "list":
                 items = item.get("items", [])
                 ordered = bool(item.get("ordered", False))
                 style = "List Number" if ordered else "List Bullet"
                 for it in items:
-                    doc.add_paragraph(str(it), style=style)
+                    p = doc.add_paragraph(str(it), style=style)
                 counters["list"] += 1
 
-            elif t == "image":
+            elif typ == "image":
+                # admite url o base64
                 width_in = float(item.get("width_in", 5))
                 if item.get("image_b64"):
                     try:
@@ -1092,7 +1042,7 @@ def generate_word(data: WordRequest):
                         doc.add_picture(img, width=DocxInches(width_in))
                     except Exception:
                         pass
-                elif item.get("url") and item["url"].startswith(("http://", "https://")):
+                elif item.get("url") and (item["url"].startswith("http://") or item["url"].startswith("https://")):
                     try:
                         with urllib.request.urlopen(item["url"]) as resp:
                             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
@@ -1103,22 +1053,21 @@ def generate_word(data: WordRequest):
                 counters["image"] += 1
 
             else:
-                # Si llega un tipo desconocido, lo ignoramos (no lo metemos como texto)
-                pass
-
-        # Guardar
+                # fallback
+                doc.add_paragraph(str(item))
+        
+        # === Guardar ===
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
         return {"url": f"/resultados/{file_id}"}
 
-    # ---------- MODO LEGADO ----------
-    data = sanitize(data.dict())
+    # ===== MODO LEGADO (tu comportamiento anterior) =====
+    data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
     doc.add_heading(data["titulo"], 0)
-    for sec in data.get("secciones") or []:
+    for sec in data["secciones"]:
         doc.add_paragraph(sec)
-
     if data.get("tablas"):
         for tabla in data["tablas"]:
             t = doc.add_table(rows=1, cols=len(tabla[0]))
@@ -1129,7 +1078,6 @@ def generate_word(data: WordRequest):
                 row_cells = t.add_row().cells
                 for i, cell in enumerate(row):
                     row_cells[i].text = cell
-
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
@@ -1420,21 +1368,6 @@ def generate_pdf(data: PDFRequest):
         with open(file_path, "wb") as f:
             f.write(pdf_bytes)
         return {"url": f"/resultados/{file_id}"}
-# dentro de build_pdf(payload) o generate_pdf(...)
-brand = _merge_brand((payload.get("brand") if 'payload' in locals() else (data.get("brand") if 'data' in locals() else None)))
-footer_text = payload.get("options", {}).get("footer_text") if 'payload' in locals() else (data.get("options", {}).get("footer_text") if 'data' in locals() else "")
-if not footer_text:
-    footer_text = f"© {date.today().year} {COMPANY_NAME}"
-
-html = Template(HTML_TMPL).render(
-    page_size=payload.get("options",{}).get("page_size","A4") if 'payload' in locals() else data.get("options",{}).get("page_size","A4"),
-    footer_text=footer_text,
-    primary=brand.get("primary","#0F766E"),
-    logo_url=brand.get("logo_url") or COMPANY_LOGO_URL,
-    title=payload.get("title","Informe") if 'payload' in locals() else data.get("title","Informe"),
-    meta=payload.get("meta",{}) if 'payload' in locals() else data.get("meta",{}),
-    sections=payload.get("sections",[]) if 'payload' in locals() else data.get("sections",[])
-)
 
     # ====== MODO LEGADO (tu FPDF actual) ======
     data = sanitize(data.dict())
@@ -1475,23 +1408,6 @@ def generate_canva(data: CanvaRequest):
                 f.write(png_bytes)
             resp["url_png"] = f"/resultados/{png_id}"
         return resp
-# dentro de build_svg(...)
-brand = _merge_brand(payload.get("theme"))
-logo_url = brand.get("logo_url") or COMPANY_LOGO_URL
-title = payload.get("title") or f"Panel de Auditoría – {COMPANY_NAME}"
-
-# añade el logo (opcional) arriba a la izquierda
-logo_tag = f'<image href="{logo_url}" x="48" y="24" height="40"/>' if logo_url else ""
-
-svg = SVG_TMPL.format(
-    w=w, h=h,
-    bg=bg, text=text, primary=primary,
-    title=safe(title),
-    kpi_cards=kpi_cards,
-    bullet_list=bullet_list
-)
-# Inserta el logo_tag justo después del rect de fondo:
-svg = svg.replace("<text x=\"48\" y=\"80\"", f"{logo_tag}\n  <text x=\"48\" y=\"80\"")
 
     # --- modo legado (tu comportamiento anterior) ---
     data = sanitize(data.dict())
