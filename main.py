@@ -1813,4 +1813,22 @@ def get_file(filename: str):
     file_path = os.path.join(RESULT_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    return FileResponse(file_path)
+    response = FileResponse(file_path)
+    # si viene ?download=1 forzamos descarga
+    # FastAPI envía request global; usamos starlette Request a través de context
+    try:
+        from starlette.requests import Request
+        from starlette.concurrency import run_until_first_complete
+    except Exception:
+        Request = None
+    if Request is not None:
+        import inspect
+        frame = inspect.currentframe()
+        while frame:
+            if "request" in frame.f_locals and isinstance(frame.f_locals["request"], Request):
+                req = frame.f_locals["request"]
+                if req.query_params.get("download") == "1":
+                    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+                break
+            frame = frame.f_back
+    return response
