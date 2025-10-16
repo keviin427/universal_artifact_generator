@@ -1378,7 +1378,6 @@ def generate_word(data: WordRequest):
     return {"url": f"/resultados/{file_id}"}
 
 
-
 @app.post("/generate_ppt")
 def generate_ppt(data: PowerPointRequest):
     # Modo AVANZADO si hay 'type' en los slides o si trae 'title/subtitle/theme/options/template_id'
