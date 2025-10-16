@@ -190,6 +190,12 @@ app.add_middleware(
 
 RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+
+def _result_url(filename: str) -> str:
+    if PUBLIC_BASE_URL:
+        return f"{PUBLIC_BASE_URL}/resultados/{filename}"
+    return f"/resultados/{filename}"
 
 DEFAULT_COMPANY_NAME = "Audit Consulting Group"
 DEFAULT_LOGO_URL = "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"
@@ -1187,7 +1193,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     file_id = f"{safe_title}_{uuid.uuid4().hex[:8]}.xlsx"
     file_path = os.path.join(RESULT_DIR, file_id)
     wb.save(file_path)
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id)}
 
 @app.post("/generate_word")
 def generate_word(data: WordRequest):
@@ -1346,7 +1352,7 @@ def generate_word(data: WordRequest):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
-        return {"url": f"/resultados/{file_id}"}
+        return {"url": _result_url(file_id)}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
@@ -1375,7 +1381,7 @@ def generate_word(data: WordRequest):
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id)}
 
 
 
@@ -1554,7 +1560,7 @@ def generate_ppt(data: PowerPointRequest):
         file_id = f"{uuid.uuid4()}.pptx"
         file_path = os.path.join(RESULT_DIR, file_id)
         prs.save(file_path)
-        return {"url": f"/resultados/{file_id}"}
+        return {"url": _result_url(file_id)}
 
     # ======= MODO LEGADO (tu implementación anterior con bullets) =======
     data = sanitize(data.dict())  # aquí sí podemos sanitizar
@@ -1659,7 +1665,7 @@ def generate_ppt(data: PowerPointRequest):
     file_id = f"{uuid.uuid4()}.pptx"
     file_path = os.path.join(RESULT_DIR, file_id)
     prs.save(file_path)
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id)}
 
 
 
@@ -1761,13 +1767,13 @@ def generate_canva(data: CanvaRequest):
         with open(svg_path, "w", encoding="utf-8") as f:
             f.write(svg_str)
 
-        resp = {"url": f"/resultados/{svg_id}"}
+        resp = {"url": _result_url(svg_id)}
         if png_bytes:
             png_id = f"{uuid.uuid4()}.png"
             png_path = os.path.join(RESULT_DIR, png_id)
             with open(png_path, "wb") as f:
                 f.write(png_bytes)
-            resp["url_png"] = f"/resultados/{png_id}"
+            resp["url_png"] = _result_url(png_id)
         return resp
 
     # --- modo legado (tu comportamiento anterior) ---
@@ -1780,7 +1786,7 @@ def generate_canva(data: CanvaRequest):
         for i, el in enumerate(data.get('elementos') or []):
             f.write(f"<text x='10' y='{60+i*22}' style='font:500 14px Arial'>{el}</text>")
         f.write("</svg>")
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id)}
 
 
 @app.post("/generate_powerbi")
@@ -1790,7 +1796,7 @@ def generate_powerbi(data: PowerBIRequest):
     file_id = f"{uuid.uuid4()}.csv"
     file_path = os.path.join(RESULT_DIR, file_id)
     df.to_csv(file_path, index=False)
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id)}
 
 @app.post("/train_model")
 def train_model(data: TrainModelRequest):
