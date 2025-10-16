@@ -191,6 +191,7 @@ app.add_middleware(
 RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+PDF_BASE_URL = (os.getenv("PDF_BASE_URL") or "https://universal-artifact-generator.onrender.com").rstrip("/")
 
 def _result_url(filename: str, request: Optional[Request] = None) -> str:
     if PUBLIC_BASE_URL:
@@ -201,6 +202,9 @@ def _result_url(filename: str, request: Optional[Request] = None) -> str:
         except Exception:
             pass
     return f"/resultados/{filename}"
+
+def _pdf_url(filename: str) -> str:
+    return f"{PDF_BASE_URL}/resultados/{filename}"
 
 DEFAULT_COMPANY_NAME = "Audit Consulting Group"
 DEFAULT_LOGO_URL = "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"
@@ -1198,7 +1202,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     file_id = f"{safe_title}_{uuid.uuid4().hex[:8]}.xlsx"
     file_path = os.path.join(RESULT_DIR, file_id)
     wb.save(file_path)
-    return {"url": _result_url(file_id, request)}
+    return {"url": _pdf_url(file_id)}
 
 @app.post("/generate_word")
 def generate_word(request: Request, data: WordRequest):
@@ -1712,7 +1716,7 @@ def generate_pdf(request: Request, data: PDFRequest):
         file_path = os.path.join(RESULT_DIR, file_id)
         with open(file_path, "wb") as f:
             f.write(pdf_bytes)
-        return {"url": f"/resultados/{file_id}"}
+        return {"url": _pdf_url(file_id)}
 
     # ====== MODO LEGADO (tu FPDF actual) ======
     data = sanitize(data.dict())
