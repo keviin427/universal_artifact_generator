@@ -42,6 +42,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.drawing.image import Image as XLImage
 
 # python-pptx (PowerPoint)
 from pptx import Presentation
@@ -114,6 +115,22 @@ def _logo_to_data_uri(logo_url: Optional[str] = None, logo_b64: Optional[str] = 
         return f"data:image/png;base64,{base64.b64encode(data).decode('ascii')}"
     except Exception:
         return DEFAULT_LOGO_DATA_URI
+
+def _add_docx_image(run, image_bytes: bytes, width_in: float = 1.6):
+    """Adjunta una imagen a un run de docx usando un archivo temporal."""
+    if not image_bytes:
+        return
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    try:
+        tmp.write(image_bytes)
+        tmp.flush()
+        tmp.close()
+        run.add_picture(tmp.name, width=DocxInches(width_in))
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
 def _render_cover(doc, placeholders: dict, brand: dict):
     """Crea una portada simple centrada con título/subtítulo/autor/fecha."""
@@ -409,8 +426,17 @@ def _add_logo(slide, prs, brand: PPTBrand):
         logo_bytes = _load_logo_bytes(getattr(brand, "logo_url", None), getattr(brand, "logo_b64", None))
         if not logo_bytes:
             return
-        img = io.BytesIO(logo_bytes)
-        slide.shapes.add_picture(img, prs.slide_width - Inches(1.9), Inches(0.25), height=Inches(0.9))
+        stream = io.BytesIO(logo_bytes)
+        stream.seek(0)
+        picture = slide.shapes.add_picture(stream, 0, 0)
+        # escalar manteniendo proporción
+        target_height = Inches(0.9)
+        scale = target_height / picture.height
+        picture.height = target_height
+        picture.width = int(picture.width * scale)
+        margin = Inches(0.4)
+        picture.left = prs.slide_width - picture.width - margin
+        picture.top = Inches(0.3)
     except Exception:
         pass
 
@@ -524,12 +550,12 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
             _add_page_numbering(pr, right)
 
     # Logo (URL o base64) al encabezado, alineado a la derecha
-    try:
-        logo_bytes = _load_logo_bytes(logo_url, logo_b64)
-        if logo_bytes:
-            header.add_paragraph().add_run().add_picture(io.BytesIO(logo_bytes), width=DocxInches(1.6))
-    except Exception:
-        pass  # si falla el logo, seguimos
+    logo_bytes = _load_logo_bytes(logo_url, logo_b64)
+    if logo_bytes:
+        p_logo = header.add_paragraph()
+        p_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run_logo = p_logo.add_run()
+        _add_docx_image(run_logo, logo_bytes, width_in=1.6)
 
     # Watermark simple: texto grande y gris en el encabezado (no “debajo del texto” real, pero visible)
     if watermark_text:
@@ -607,8 +633,11 @@ def _prepare_pdf_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     brand = (pl.get("brand") or {})
     # logo_url <- preferimos data URI
     logo_b64 = brand.get("logo_b64")
-    logo_url = brand.get("logo_url")
-    pl["logo_url"] = _logo_to_data_uri(logo_url, logo_b64)
+    logo_url = brand.get("logo_url") or DEFAULT_LOGO_URL
+    if logo_b64:
+        pl["logo_url"] = f"data:image/png;base64,{logo_b64}"
+    else:
+        pl["logo_url"] = _to_data_uri(logo_url)
     company_name = brand.get("company_name") or pl.get("company_name") or DEFAULT_COMPANY_NAME
     pl["company_name"] = company_name
     meta = dict(pl.get("meta") or {})
@@ -826,6 +855,18 @@ def _brand_excel_sheet(ws, max_cols: int):
     cell.hyperlink = DEFAULT_LOGO_URL
     cell.font = Font(bold=True, size=14, color="0563C1")
     cell.alignment = Alignment(horizontal="center")
+    try:
+        logo_bytes = _load_logo_bytes(DEFAULT_LOGO_URL, DEFAULT_LOGO_B64)
+        if logo_bytes:
+            bio = io.BytesIO(logo_bytes)
+            bio.seek(0)
+            img = XLImage(bio)
+            img.width = 120
+            img.height = 120
+            anchor_col = min(max_cols, 3)
+            ws.add_image(img, f"{get_column_letter(anchor_col)}1")
+    except Exception:
+        pass
 
 def _apply_excel_header_footer(ws):
     header = getattr(ws, "header_footer", None)
@@ -1161,10 +1202,8 @@ def generate_word(data: WordRequest):
         logo_b64 = placeholders.get("logo_b64")
         logo_url = placeholders.get("logo_url")
         if not logo_b64 and not logo_url:
-            logo_b64 = DEFAULT_LOGO_B64
             logo_url = DEFAULT_LOGO_URL
             placeholders["logo_url"] = logo_url
-            placeholders["logo_b64"] = logo_b64
 
         header_cfg = dict(options.get("header") or {})
         if not header_cfg.get("left"):
@@ -1316,8 +1355,7 @@ def generate_word(data: WordRequest):
         doc.sections[0],
         {"left": DEFAULT_COMPANY_NAME, "right": "Pagina {PAGE} de {NUMPAGES}"},
         {"center": DEFAULT_COMPANY_NAME},
-        logo_url=DEFAULT_LOGO_URL,
-        logo_b64=DEFAULT_LOGO_B64,
+        logo_url=DEFAULT_LOGO_URL
     )
     brand_para = doc.add_paragraph(DEFAULT_COMPANY_NAME)
     brand_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1642,15 +1680,7 @@ def generate_pdf(data: PDFRequest):
         primary = (pl.get("brand") or {}).get("primary", "#0F766E")
         opts = pl.get("options") or {}
         page_size = opts.get("page_size", "A4")
-        raw_footer = opts.get("footer_text")
-        if raw_footer is None or not str(raw_footer).strip():
-            footer_text = DEFAULT_COMPANY_NAME
-        else:
-            footer_text = re.sub(r"{[^}]+}", "", str(raw_footer))
-            footer_text = re.sub(r"\s{2,}", " ", footer_text)
-            footer_text = re.sub(r"\s*(\||·|–|-)\s*", " · ", footer_text).strip(" ·")
-            if not footer_text:
-                footer_text = DEFAULT_COMPANY_NAME
+        footer_text = (opts.get("footer_text") or DEFAULT_COMPANY_NAME)
 
         html = Template(PDF_HTML_TMPL).render(
             page_size=page_size,
@@ -1679,10 +1709,9 @@ def generate_pdf(data: PDFRequest):
     pdf.add_page()
     logo_tmp = None
     try:
-        logo_bytes = _load_logo_bytes(DEFAULT_LOGO_URL, DEFAULT_LOGO_B64)
-        if logo_bytes:
+        with urllib.request.urlopen(DEFAULT_LOGO_URL) as resp:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            tmp.write(logo_bytes)
+            tmp.write(resp.read())
             tmp.flush()
             tmp.close()
             logo_tmp = tmp.name
