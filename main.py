@@ -76,6 +76,45 @@ def clean_text(text):
         return re.sub(r"[^\w\s\-.,()#]", "", text)
     return text
 
+def _load_logo_bytes(logo_url: Optional[str] = None, logo_b64: Optional[str] = None) -> Optional[bytes]:
+    """Devuelve los bytes del logo priorizando base64/url y con fallback corporativo."""
+    if logo_b64:
+        try:
+            if logo_b64.startswith("data:"):
+                logo_b64 = logo_b64.split(",", 1)[1]
+            return b64decode(logo_b64)
+        except Exception:
+            pass
+    url = logo_url or ""
+    if url.startswith("data:"):
+        try:
+            return b64decode(url.split(",", 1)[1])
+        except Exception:
+            return b64decode(DEFAULT_LOGO_B64)
+    if url.startswith("http"):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                return resp.read()
+        except Exception:
+            return b64decode(DEFAULT_LOGO_B64)
+    if url:
+        try:
+            with open(url, "rb") as fh:
+                return fh.read()
+        except Exception:
+            return b64decode(DEFAULT_LOGO_B64)
+    return b64decode(DEFAULT_LOGO_B64)
+
+def _logo_to_data_uri(logo_url: Optional[str] = None, logo_b64: Optional[str] = None) -> str:
+    """Retorna el logo en formato data URI, con fallback corporativo."""
+    try:
+        data = _load_logo_bytes(logo_url, logo_b64)
+        if not data:
+            return DEFAULT_LOGO_DATA_URI
+        return f"data:image/png;base64,{base64.b64encode(data).decode('ascii')}"
+    except Exception:
+        return DEFAULT_LOGO_DATA_URI
+
 def _render_cover(doc, placeholders: dict, brand: dict):
     """Crea una portada simple centrada con título/subtítulo/autor/fecha."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -137,6 +176,85 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 
 DEFAULT_COMPANY_NAME = "Audit Consulting Group"
 DEFAULT_LOGO_URL = "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"
+DEFAULT_LOGO_B64 = (
+    "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"
+    "8n+xJtMt7jn4mQAAAABJRU5ErkJggg=="
+)
+DEFAULT_LOGO_DATA_URI = f"data:image/png;base64,{DEFAULT_LOGO_B64}"
 
 from typing import List, Dict, Optional, Union
 
@@ -287,14 +405,11 @@ def _set_background(slide, color_hex: Optional[str]):
     fill.fore_color.rgb = _hex_to_rgb(color_hex)
 
 def _add_logo(slide, prs, brand: PPTBrand):
-    if not (brand and (brand.logo_b64 or brand.logo_url)):
-        return
     try:
-        if brand.logo_b64:
-            img = io.BytesIO(b64decode(brand.logo_b64))
-        else:
-            with urllib.request.urlopen(brand.logo_url) as resp:
-                img = io.BytesIO(resp.read())
+        logo_bytes = _load_logo_bytes(getattr(brand, "logo_url", None), getattr(brand, "logo_b64", None))
+        if not logo_bytes:
+            return
+        img = io.BytesIO(logo_bytes)
         slide.shapes.add_picture(img, prs.slide_width - Inches(1.9), Inches(0.25), height=Inches(0.9))
     except Exception:
         pass
@@ -410,14 +525,9 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
 
     # Logo (URL o base64) al encabezado, alineado a la derecha
     try:
-        if logo_b64:
-            img_bytes = io.BytesIO(b64decode(logo_b64))
-            header.add_paragraph().add_run().add_picture(img_bytes, width=DocxInches(1.6))
-        elif logo_url and (logo_url.startswith("http://") or logo_url.startswith("https://")):
-            with urllib.request.urlopen(logo_url) as resp:
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.write(resp.read()); tmp.flush()
-                header.add_paragraph().add_run().add_picture(tmp.name, width=DocxInches(1.6))
+        logo_bytes = _load_logo_bytes(logo_url, logo_b64)
+        if logo_bytes:
+            header.add_paragraph().add_run().add_picture(io.BytesIO(logo_bytes), width=DocxInches(1.6))
     except Exception:
         pass  # si falla el logo, seguimos
 
@@ -497,11 +607,8 @@ def _prepare_pdf_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     brand = (pl.get("brand") or {})
     # logo_url <- preferimos data URI
     logo_b64 = brand.get("logo_b64")
-    logo_url = brand.get("logo_url") or DEFAULT_LOGO_URL
-    if logo_b64:
-        pl["logo_url"] = f"data:image/png;base64,{logo_b64}"
-    else:
-        pl["logo_url"] = _to_data_uri(logo_url)
+    logo_url = brand.get("logo_url")
+    pl["logo_url"] = _logo_to_data_uri(logo_url, logo_b64)
     company_name = brand.get("company_name") or pl.get("company_name") or DEFAULT_COMPANY_NAME
     pl["company_name"] = company_name
     meta = dict(pl.get("meta") or {})
@@ -721,9 +828,25 @@ def _brand_excel_sheet(ws, max_cols: int):
     cell.alignment = Alignment(horizontal="center")
 
 def _apply_excel_header_footer(ws):
-    ws.header_footer.left_header = DEFAULT_COMPANY_NAME
-    ws.header_footer.center_header = ""
-    ws.header_footer.left_footer = DEFAULT_COMPANY_NAME
+    header = getattr(ws, "header_footer", None)
+    if header is not None:
+        header.left_header = DEFAULT_COMPANY_NAME
+        header.center_header = ""
+        header.left_footer = DEFAULT_COMPANY_NAME
+        return
+    # Fallback para versiones viejas de openpyxl
+    if hasattr(ws, "oddHeader"):
+        ws.oddHeader.left = DEFAULT_COMPANY_NAME
+        if hasattr(ws.oddHeader, "center"):
+            ws.oddHeader.center = ""
+        if hasattr(ws, "evenHeader"):
+            ws.evenHeader.left = DEFAULT_COMPANY_NAME
+            if hasattr(ws.evenHeader, "center"):
+                ws.evenHeader.center = ""
+    if hasattr(ws, "oddFooter"):
+        ws.oddFooter.left = DEFAULT_COMPANY_NAME
+        if hasattr(ws, "evenFooter"):
+            ws.evenFooter.left = DEFAULT_COMPANY_NAME
 
 @app.post("/generate_excel")
 def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
@@ -1009,8 +1132,10 @@ def generate_word(data: WordRequest):
         logo_b64 = placeholders.get("logo_b64")
         logo_url = placeholders.get("logo_url")
         if not logo_b64 and not logo_url:
+            logo_b64 = DEFAULT_LOGO_B64
             logo_url = DEFAULT_LOGO_URL
             placeholders["logo_url"] = logo_url
+            placeholders["logo_b64"] = logo_b64
 
         header_cfg = dict(options.get("header") or {})
         if not header_cfg.get("left"):
@@ -1162,7 +1287,8 @@ def generate_word(data: WordRequest):
         doc.sections[0],
         {"left": DEFAULT_COMPANY_NAME, "right": "Pagina {PAGE} de {NUMPAGES}"},
         {"center": DEFAULT_COMPANY_NAME},
-        logo_url=DEFAULT_LOGO_URL
+        logo_url=DEFAULT_LOGO_URL,
+        logo_b64=DEFAULT_LOGO_B64,
     )
     brand_para = doc.add_paragraph(DEFAULT_COMPANY_NAME)
     brand_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1209,6 +1335,7 @@ def generate_ppt(data: PowerPointRequest):
         brand_data = payload.get("brand") or {}
         brand = PPTBrand(**brand_data)
         if not (brand.logo_b64 or brand.logo_url):
+            brand.logo_b64 = DEFAULT_LOGO_B64
             brand.logo_url = DEFAULT_LOGO_URL
         company_name = (
             brand_data.get("company_name")
@@ -1370,6 +1497,7 @@ def generate_ppt(data: PowerPointRequest):
     brand_data = data.get("brand") or {}
     brand = PPTBrand(**brand_data)
     if not (brand.logo_b64 or brand.logo_url):
+        brand.logo_b64 = DEFAULT_LOGO_B64
         brand.logo_url = DEFAULT_LOGO_URL
     company_name = brand_data.get("company_name") or data.get("company_name") or DEFAULT_COMPANY_NAME
 
@@ -1485,7 +1613,15 @@ def generate_pdf(data: PDFRequest):
         primary = (pl.get("brand") or {}).get("primary", "#0F766E")
         opts = pl.get("options") or {}
         page_size = opts.get("page_size", "A4")
-        footer_text = (opts.get("footer_text") or DEFAULT_COMPANY_NAME)
+        raw_footer = opts.get("footer_text")
+        if raw_footer is None or not str(raw_footer).strip():
+            footer_text = DEFAULT_COMPANY_NAME
+        else:
+            footer_text = re.sub(r"{[^}]+}", "", str(raw_footer))
+            footer_text = re.sub(r"\s{2,}", " ", footer_text)
+            footer_text = re.sub(r"\s*(\||·|–|-)\s*", " · ", footer_text).strip(" ·")
+            if not footer_text:
+                footer_text = DEFAULT_COMPANY_NAME
 
         html = Template(PDF_HTML_TMPL).render(
             page_size=page_size,
@@ -1514,9 +1650,10 @@ def generate_pdf(data: PDFRequest):
     pdf.add_page()
     logo_tmp = None
     try:
-        with urllib.request.urlopen(DEFAULT_LOGO_URL) as resp:
+        logo_bytes = _load_logo_bytes(DEFAULT_LOGO_URL, DEFAULT_LOGO_B64)
+        if logo_bytes:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            tmp.write(resp.read())
+            tmp.write(logo_bytes)
             tmp.flush()
             tmp.close()
             logo_tmp = tmp.name
