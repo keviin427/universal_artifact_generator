@@ -830,23 +830,52 @@ def _brand_excel_sheet(ws, max_cols: int):
 def _apply_excel_header_footer(ws):
     header = getattr(ws, "header_footer", None)
     if header is not None:
-        header.left_header = DEFAULT_COMPANY_NAME
-        header.center_header = ""
-        header.left_footer = DEFAULT_COMPANY_NAME
+        if hasattr(header.left_header, "text"):
+            header.left_header.text = DEFAULT_COMPANY_NAME
+        else:
+            header.left_header = DEFAULT_COMPANY_NAME
+        if hasattr(header.center_header, "text"):
+            header.center_header.text = ""
+        else:
+            header.center_header = ""
+        if hasattr(header.left_footer, "text"):
+            header.left_footer.text = DEFAULT_COMPANY_NAME
+        else:
+            header.left_footer = DEFAULT_COMPANY_NAME
         return
     # Fallback para versiones viejas de openpyxl
-    if hasattr(ws, "oddHeader"):
-        ws.oddHeader.left = DEFAULT_COMPANY_NAME
-        if hasattr(ws.oddHeader, "center"):
-            ws.oddHeader.center = ""
-        if hasattr(ws, "evenHeader"):
-            ws.evenHeader.left = DEFAULT_COMPANY_NAME
-            if hasattr(ws.evenHeader, "center"):
-                ws.evenHeader.center = ""
-    if hasattr(ws, "oddFooter"):
-        ws.oddFooter.left = DEFAULT_COMPANY_NAME
-        if hasattr(ws, "evenFooter"):
-            ws.evenFooter.left = DEFAULT_COMPANY_NAME
+    odd_header = getattr(ws, "oddHeader", None)
+    if odd_header is not None:
+        if hasattr(odd_header.left, "text"):
+            odd_header.left.text = DEFAULT_COMPANY_NAME
+        else:
+            odd_header.left = DEFAULT_COMPANY_NAME
+        if hasattr(odd_header.center, "text"):
+            odd_header.center.text = ""
+        else:
+            odd_header.center = ""
+    even_header = getattr(ws, "evenHeader", None)
+    if even_header is not None:
+        if hasattr(even_header.left, "text"):
+            even_header.left.text = DEFAULT_COMPANY_NAME
+        else:
+            even_header.left = DEFAULT_COMPANY_NAME
+        if hasattr(even_header.center, "text"):
+            even_header.center.text = ""
+        else:
+            even_header.center = ""
+    odd_footer = getattr(ws, "oddFooter", None)
+    if odd_footer is not None:
+        if hasattr(odd_footer.left, "text"):
+            odd_footer.left.text = DEFAULT_COMPANY_NAME
+        else:
+            odd_footer.left = DEFAULT_COMPANY_NAME
+    even_footer = getattr(ws, "evenFooter", None)
+    if even_footer is not None:
+        if hasattr(even_footer.left, "text"):
+            even_footer.left.text = DEFAULT_COMPANY_NAME
+        else:
+            even_footer.left = DEFAULT_COMPANY_NAME
 
 @app.post("/generate_excel")
 def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
