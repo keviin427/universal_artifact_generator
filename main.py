@@ -37,7 +37,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.formatting.rule import ColorScaleRule
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -134,6 +134,9 @@ app.add_middleware(
 
 RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
+
+DEFAULT_COMPANY_NAME = "Audit Consulting Group"
+DEFAULT_LOGO_URL = "https://i0.wp.com/auditconsulting.ec/wp-content/uploads/2023/02/Logo-color-Audit.png?fit=768%2C768&ssl=1"
 
 from typing import List, Dict, Optional, Union
 
@@ -292,11 +295,25 @@ def _add_logo(slide, prs, brand: PPTBrand):
         else:
             with urllib.request.urlopen(brand.logo_url) as resp:
                 img = io.BytesIO(resp.read())
-        slide.shapes.add_picture(img, prs.slide_width - Inches(1.7), Inches(0.25), height=Inches(0.6))
+        slide.shapes.add_picture(img, prs.slide_width - Inches(1.9), Inches(0.25), height=Inches(0.9))
     except Exception:
         pass
 
-def _add_footer(slide, prs, idx: int, total: int, brand: PPTBrand, date_text: Optional[str] = None):
+def _brand_slide(slide, prs, brand: PPTBrand, company_name: Optional[str]):
+    _add_logo(slide, prs, brand)
+    if not company_name:
+        return
+    try:
+        box = slide.shapes.add_textbox(Inches(0.5), Inches(0.25), Inches(4.0), Inches(0.35))
+        p = box.text_frame.paragraphs[0]
+        p.text = company_name
+        p.font.name = brand.body_font or "Calibri"
+        p.font.size = Pt(14)
+        p.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
+    except Exception:
+        pass
+
+def _add_footer(slide, prs, idx: int, total: int, brand: PPTBrand, date_text: Optional[str] = None, company_name: Optional[str] = None, show_slide_number: bool = True):
     # izquierda (fecha)
     if date_text:
         box_left = slide.shapes.add_textbox(Inches(0.5), prs.slide_height - Inches(0.5), Inches(3), Inches(0.3))
@@ -305,13 +322,22 @@ def _add_footer(slide, prs, idx: int, total: int, brand: PPTBrand, date_text: Op
         pL.font.name = brand.body_font or "Calibri"
         pL.font.size = Pt(10)
         pL.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
+    # centro (company)
+    if company_name:
+        box_center = slide.shapes.add_textbox(prs.slide_width / 2 - Inches(1.5), prs.slide_height - Inches(0.5), Inches(3.0), Inches(0.3))
+        pC = box_center.text_frame.paragraphs[0]
+        pC.text = company_name
+        pC.font.name = brand.body_font or "Calibri"
+        pC.font.size = Pt(10)
+        pC.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
     # derecha (X / N)
-    box = slide.shapes.add_textbox(prs.slide_width - Inches(1.2), prs.slide_height - Inches(0.5), Inches(1.0), Inches(0.3))
-    p = box.text_frame.paragraphs[0]
-    p.text = f"{idx + 1} / {total}"
-    p.font.name = brand.body_font or "Calibri"
-    p.font.size = Pt(10)
-    p.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
+    if show_slide_number:
+        box = slide.shapes.add_textbox(prs.slide_width - Inches(1.2), prs.slide_height - Inches(0.5), Inches(1.0), Inches(0.3))
+        p = box.text_frame.paragraphs[0]
+        p.text = f"{idx + 1} / {total}"
+        p.font.name = brand.body_font or "Calibri"
+        p.font.size = Pt(10)
+        p.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
 
 
 def _add_slide_number(slide, prs, idx: int, brand: PPTBrand):
@@ -351,13 +377,20 @@ def _add_page_numbering(paragraph, pattern: str = "Página {PAGE} de {NUMPAGES}"
     if len(parts2) > 1:
         paragraph.add_run(parts2[1])
 
+def _clear_section_container(container):
+    """Elimina párrafos/tablas existentes en encabezados o pies antes de reconstruirlos."""
+    for tbl in list(container.tables):
+        tbl._element.getparent().remove(tbl._element)
+    for p in list(container.paragraphs):
+        p._element.getparent().remove(p._element)
+
 def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg: Optional[Dict[str, str]], logo_url=None, logo_b64=None, watermark_text=None):
     # Encabezado (tres zonas simuladas con alineación)
     header = section.header
+    _clear_section_container(header)
     if header_cfg:
-        p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        p = header.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        p.clear()
         left = header_cfg.get("left", "")
         center = header_cfg.get("center", "")
         right = header_cfg.get("right", "Página {PAGE} de {NUMPAGES}")
@@ -379,12 +412,12 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
     try:
         if logo_b64:
             img_bytes = io.BytesIO(b64decode(logo_b64))
-            header.add_paragraph().add_run().add_picture(img_bytes, width=DocxInches(1.2))
+            header.add_paragraph().add_run().add_picture(img_bytes, width=DocxInches(1.6))
         elif logo_url and (logo_url.startswith("http://") or logo_url.startswith("https://")):
             with urllib.request.urlopen(logo_url) as resp:
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
                 tmp.write(resp.read()); tmp.flush()
-                header.add_paragraph().add_run().add_picture(tmp.name, width=DocxInches(1.2))
+                header.add_paragraph().add_run().add_picture(tmp.name, width=DocxInches(1.6))
     except Exception:
         pass  # si falla el logo, seguimos
 
@@ -399,9 +432,9 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
     # Pie
     if footer_cfg:
         footer = section.footer
-        p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        _clear_section_container(footer)
+        p = footer.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p.clear()
         center = footer_cfg.get("center", "")
         left = footer_cfg.get("left", "")
         right = footer_cfg.get("right", "")
@@ -464,11 +497,16 @@ def _prepare_pdf_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     brand = (pl.get("brand") or {})
     # logo_url <- preferimos data URI
     logo_b64 = brand.get("logo_b64")
-    logo_url = brand.get("logo_url")
+    logo_url = brand.get("logo_url") or DEFAULT_LOGO_URL
     if logo_b64:
         pl["logo_url"] = f"data:image/png;base64,{logo_b64}"
     else:
         pl["logo_url"] = _to_data_uri(logo_url)
+    company_name = brand.get("company_name") or pl.get("company_name") or DEFAULT_COMPANY_NAME
+    pl["company_name"] = company_name
+    meta = dict(pl.get("meta") or {})
+    meta.setdefault("company_name", company_name)
+    pl["meta"] = meta
 
     # ids para headings + convertir imágenes a data URI
     sections = []
@@ -603,6 +641,7 @@ PDF_HTML_TMPL = r"""
   th { background: {{ primary }}10; text-align: left; }
   .cover { display:flex; height:85vh; align-items:center; justify-content:center; text-align:center; }
   .logo { max-height:60px; margin-bottom: 10px; }
+  .company { font-size: 12pt; color:#333; margin-top: 6px; }
   figure { margin: 10px 0; text-align:center; }
   figcaption { font-size: 10pt; color:#666; }
   /* TOC */
@@ -621,6 +660,7 @@ PDF_HTML_TMPL = r"""
 <div class="cover">
   <div>
     {% if logo_url %}<img class="logo" src="{{ logo_url }}">{% endif %}
+    <div class="company">{{ company_name }}</div>
     <h1>{{ title }}</h1>
     <div>{{ meta.autor or "" }}{% if meta.autor and meta.fecha %} · {% endif %}{{ meta.fecha or "" }}</div>
   </div>
@@ -671,6 +711,20 @@ def healthz():
 def root():
     return {"message": "API funcionando correctamente"}
 
+def _brand_excel_sheet(ws, max_cols: int):
+    max_cols = max(1, max_cols)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_cols)
+    cell = ws.cell(row=1, column=1)
+    cell.value = DEFAULT_COMPANY_NAME
+    cell.hyperlink = DEFAULT_LOGO_URL
+    cell.font = Font(bold=True, size=14, color="0563C1")
+    cell.alignment = Alignment(horizontal="center")
+
+def _apply_excel_header_footer(ws):
+    ws.header_footer.left_header = DEFAULT_COMPANY_NAME
+    ws.header_footer.center_header = ""
+    ws.header_footer.left_footer = DEFAULT_COMPANY_NAME
+
 @app.post("/generate_excel")
 def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     """
@@ -698,7 +752,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     number_formats = (theme.get("number_formats") or {})  # {"Columna": "0.00"} o formatos de Excel
     sheets_opts    = (opts.get("sheets") or [])
     s0             = sheets_opts[0] if sheets_opts else {}
-    freeze_addr    = s0.get("freeze") or "A2"
+    freeze_addr    = s0.get("freeze")
     widths_map     = (s0.get("widths") or {})             # {"A": 18, "B": 30, ...}
     table_opts     = (s0.get("table") or {})
     table_style    = table_opts.get("style", "Table Style Medium 9")
@@ -718,17 +772,24 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 
     # ====== Hoja: Detalle ======
     ws_det = wb.create_sheet("Detalle")
+    _brand_excel_sheet(ws_det, max(len(headers), 2))
+    _apply_excel_header_footer(ws_det)
     ws_det.append(headers)
+    header_row_idx = ws_det.max_row
+    data_start_idx = header_row_idx + 1
     for r in rows:
         ws_det.append(r)
 
     # Estilo encabezado
-    for c in ws_det[1]:
+    for c in ws_det[header_row_idx]:
         c.fill = header_fill
         c.font = header_font
 
-    # Congelar según options o A2 por defecto
-    ws_det.freeze_panes = freeze_addr
+    # Congelar según options o default branding
+    if freeze_addr:
+        ws_det.freeze_panes = freeze_addr
+    else:
+        ws_det.freeze_panes = f"A{data_start_idx}"
 
     # Ajuste de anchos auto
     for col_idx, h in enumerate(headers, start=1):
@@ -760,7 +821,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     for j, h in enumerate(headers):
         lch = str(h).strip().lower()
         col_letter = get_column_letter(j+1)
-        rng = f"{col_letter}2:{col_letter}{ws_det.max_row}"
+        rng = f"{col_letter}{data_start_idx}:{col_letter}{ws_det.max_row}"
         if any(k in lch for k in currency_headers) and j in numeric_cols:
             for cell in ws_det[rng]:
                 for c in cell: c.number_format = FORMAT_CURRENCY_USD_SIMPLE
@@ -772,7 +833,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     for col_name, fmt in number_formats.items():
         if col_name in headers:
             j = headers.index(col_name) + 1
-            rng = f"{get_column_letter(j)}2:{get_column_letter(j)}{ws_det.max_row}"
+            rng = f"{get_column_letter(j)}{data_start_idx}:{get_column_letter(j)}{ws_det.max_row}"
             for cell in ws_det[rng]:
                 for c in cell: c.number_format = fmt
 
@@ -782,7 +843,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     if totals_row:
         ws_det.append([None] * last_col)
         last_row_tot = ws_det.max_row
-        ref = f"A1:{get_column_letter(last_col)}{last_row_tot}"
+        ref = f"A{header_row_idx}:{get_column_letter(last_col)}{last_row_tot}"
         table = Table(displayName="TablaDetalle", ref=ref, totalsRowCount=1)
         style = TableStyleInfo(name=table_style, showRowStripes=True, showColumnStripes=False)
         table.tableStyleInfo = style
@@ -793,16 +854,18 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
                 col.totalsRowFunction = "sum"
         ws_det.add_table(table)
     else:
-        ref = f"A1:{get_column_letter(last_col)}{last_row}"
+        ref = f"A{header_row_idx}:{get_column_letter(last_col)}{last_row}"
         table = Table(displayName="TablaDetalle", ref=ref)
         table.tableStyleInfo = TableStyleInfo(name=table_style, showRowStripes=True, showColumnStripes=False)
         ws_det.add_table(table)
+
+    last_row = ws_det.max_row
 
     # Formato condicional sobre la última numérica (si existe)
     num_cols_sorted = sorted(list(numeric_cols))
     if num_cols_sorted:
         last_num_col = num_cols_sorted[-1] + 1
-        rng = f"{get_column_letter(last_num_col)}2:{get_column_letter(last_num_col)}{last_row}"
+        rng = f"{get_column_letter(last_num_col)}{data_start_idx}:{get_column_letter(last_num_col)}{last_row}"
         ws_det.conditional_formatting.add(
             rng,
             ColorScaleRule(start_type="min", mid_type="percentile", mid_value=50, end_type="max")
@@ -814,17 +877,18 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     if 1 <= len(uniques) <= 20 and sum(len(u) for u in uniques) < 240:
         dv = DataValidation(type="list", formula1='"' + ",".join(uniques) + '"', allow_blank=True)
         ws_det.add_data_validation(dv)
-        dv.add(f"A2:A{last_row}")
+        dv.add(f"A{data_start_idx}:A{last_row}")
 
     # Config impresión (override con options.print si vino)
     for ws in [ws_det]:
         ws.page_setup.orientation = "portrait" if print_orient == "portrait" else "landscape"
         ws.page_setup.fitToWidth = fit_to_width
         ws.page_setup.fitToHeight = 0
-        ws.print_title_rows = "1:1"
+        ws.print_title_rows = f"1:{header_row_idx}"
 
     # ====== Hoja: Resumen ======
     ws_res = wb.create_sheet("Resumen")
+    _apply_excel_header_footer(ws_res)
     ws_res.append(headers)
     for r in rows:
         ws_res.append(r)
@@ -870,6 +934,7 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
         if num_cols:
             piv = df.groupby(first_col, dropna=False)[num_cols].sum().reset_index()
             ws_piv = wb.create_sheet("Pivot")
+            _apply_excel_header_footer(ws_piv)
             ws_piv.append([first_col] + num_cols)
             for row in piv.itertuples(index=False):
                 ws_piv.append(list(row))
@@ -890,6 +955,11 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 
     # ====== Gráficos ======
     ws_chart = wb.create_sheet("Gráficos")
+    _apply_excel_header_footer(ws_chart)
+    ws_chart["A1"] = DEFAULT_COMPANY_NAME
+    ws_chart["A1"].hyperlink = DEFAULT_LOGO_URL
+    ws_chart["A1"].font = Font(bold=True, color="0563C1")
+    ws_chart["A1"].alignment = Alignment(horizontal="center")
     cats = None
     if ws_res.max_row >= 2:
         cats = Reference(ws_res, min_col=1, min_row=2, max_row=ws_res.max_row)
@@ -930,9 +1000,30 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
 def generate_word(data: WordRequest):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
-        placeholders = data.placeholders or {}
-        options = data.options or {}
+        placeholders = dict(data.placeholders or {})
+        options = dict(data.options or {})
         content = data.content or []
+
+        company_name = placeholders.get("company_name") or DEFAULT_COMPANY_NAME
+        placeholders["company_name"] = company_name
+        logo_b64 = placeholders.get("logo_b64")
+        logo_url = placeholders.get("logo_url")
+        if not logo_b64 and not logo_url:
+            logo_url = DEFAULT_LOGO_URL
+            placeholders["logo_url"] = logo_url
+
+        header_cfg = dict(options.get("header") or {})
+        if not header_cfg.get("left"):
+            header_cfg["left"] = company_name
+        if not header_cfg.get("right"):
+            header_cfg["right"] = "Página {PAGE} de {NUMPAGES}"
+        footer_cfg = dict(options.get("footer") or {})
+        if not (footer_cfg.get("left") or footer_cfg.get("center") or footer_cfg.get("right")):
+            footer_cfg["center"] = company_name
+        else:
+            footer_cfg.setdefault("center", company_name)
+        options["header"] = header_cfg
+        options["footer"] = footer_cfg
 
         doc = Document()
 
@@ -952,12 +1043,14 @@ def generate_word(data: WordRequest):
             rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
         meta = []
+        if company_name:
+            meta.append(company_name)
         if autor: meta.append(autor)
         if fecha: meta.append(fecha)
         if meta:
             pm = doc.add_paragraph()
             pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            pm.add_run(" – ".join(meta)).italic = True
+            pm.add_run(" - ".join(meta)).italic = True
 
         doc.add_page_break()
 
@@ -975,8 +1068,8 @@ def generate_word(data: WordRequest):
             wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
-            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-            options.get("footer", {"center": ""}),
+            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
+            footer_cfg or {"center": company_name},
             logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
@@ -1003,8 +1096,8 @@ def generate_word(data: WordRequest):
                         # heredar header/footer
                         _set_header_footer(
                             new_sec,
-                            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
-                            options.get("footer", {"center": ""}),
+                            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
+                            footer_cfg or {"center": company_name},
                             logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
                         )
                         break
@@ -1065,6 +1158,14 @@ def generate_word(data: WordRequest):
     # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
+    _set_header_footer(
+        doc.sections[0],
+        {"left": DEFAULT_COMPANY_NAME, "right": "Pagina {PAGE} de {NUMPAGES}"},
+        {"center": DEFAULT_COMPANY_NAME},
+        logo_url=DEFAULT_LOGO_URL
+    )
+    brand_para = doc.add_paragraph(DEFAULT_COMPANY_NAME)
+    brand_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_heading(data["titulo"], 0)
     for sec in data["secciones"]:
         doc.add_paragraph(sec)
@@ -1107,6 +1208,14 @@ def generate_ppt(data: PowerPointRequest):
         # === brand / theme ===
         brand_data = payload.get("brand") or {}
         brand = PPTBrand(**brand_data)
+        if not (brand.logo_b64 or brand.logo_url):
+            brand.logo_url = DEFAULT_LOGO_URL
+        company_name = (
+            brand_data.get("company_name")
+            or (payload.get("company") if isinstance(payload.get("company"), str) else None)
+            or payload.get("company_name")
+            or DEFAULT_COMPANY_NAME
+        )
         theme = payload.get("theme") or {}
         if theme.get("primary"):
             brand.primary = theme["primary"]
@@ -1131,7 +1240,7 @@ def generate_ppt(data: PowerPointRequest):
             # estilos
             if brand.primary:
                 _style_title(slide.shapes.title, brand)
-            _add_logo(slide, prs, brand)
+            _brand_slide(slide, prs, brand, company_name)
 
         # Resto de slides en orden
         for s in slides_in:
@@ -1156,7 +1265,7 @@ def generate_ppt(data: PowerPointRequest):
                     p.font.name = brand.body_font or "Calibri"
                     p.font.size = Pt(28)
                     p.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
-                _add_logo(slide, prs, brand)
+                _brand_slide(slide, prs, brand, company_name)
 
             # === TABLA ===
             elif isinstance(s, dict) and s.get("type") == "table":
@@ -1191,7 +1300,7 @@ def generate_ppt(data: PowerPointRequest):
                         p = cell.text_frame.paragraphs[0]
                         p.font.name = brand.body_font or "Calibri"
                         p.font.size = Pt(12)
-                _add_logo(slide, prs, brand)
+                _brand_slide(slide, prs, brand, company_name)
 
             # === CHART ===
             elif isinstance(s, dict) and s.get("type") == "chart":
@@ -1210,7 +1319,7 @@ def generate_ppt(data: PowerPointRequest):
                     Inches(1), Inches(1.6), Inches(8), Inches(4),
                     data
                 )
-                _add_logo(slide, prs, brand)
+                _brand_slide(slide, prs, brand, company_name)
 
             # === fallback: slide texto simple (por compatibilidad)
             else:
@@ -1230,15 +1339,23 @@ def generate_ppt(data: PowerPointRequest):
                     p.font.name = brand.body_font or "Calibri"
                     p.font.size = Pt(20)
                 _style_body(body, brand)
-                _add_logo(slide, prs, brand)
+                _brand_slide(slide, prs, brand, company_name)
 
         # Footer (números + fecha)
         total = len(prs.slides)
         show_nums = (payload.get("options") or {}).get("slide_numbers", True)
         footer_date = date.today().strftime("%Y-%m-%d")
-        if show_nums:
-            for i, sl in enumerate(prs.slides):
-                _add_footer(sl, prs, i, total, brand, date_text=footer_date)
+        for i, sl in enumerate(prs.slides):
+            _add_footer(
+                sl,
+                prs,
+                i,
+                total,
+                brand,
+                date_text=footer_date,
+                company_name=company_name,
+                show_slide_number=bool(show_nums),
+            )
 
         file_id = f"{uuid.uuid4()}.pptx"
         file_path = os.path.join(RESULT_DIR, file_id)
@@ -1252,6 +1369,9 @@ def generate_ppt(data: PowerPointRequest):
     # normaliza/instancia brand
     brand_data = data.get("brand") or {}
     brand = PPTBrand(**brand_data)
+    if not (brand.logo_b64 or brand.logo_url):
+        brand.logo_url = DEFAULT_LOGO_URL
+    company_name = brand_data.get("company_name") or data.get("company_name") or DEFAULT_COMPANY_NAME
 
     prs = Presentation()
 
@@ -1290,13 +1410,22 @@ def generate_ppt(data: PowerPointRequest):
                     p.font.size = Pt(20)
 
             if apply_branding:
-                _add_logo(slide, prs, brand)
+                _brand_slide(slide, prs, brand, company_name)
                 _style_body(body, brand)
         # números en modo legado
         if apply_branding:
             total = len(prs.slides)
             for i, sl in enumerate(prs.slides):
-                _add_footer(sl, prs, i, total, brand, date_text=date.today().strftime("%Y-%m-%d"))
+                _add_footer(
+                    sl,
+                    prs,
+                    i,
+                    total,
+                    brand,
+                    date_text=date.today().strftime("%Y-%m-%d"),
+                    company_name=company_name,
+                    show_slide_number=True,
+                )
 
     else:
         # slide de título con bullets
@@ -1320,8 +1449,17 @@ def generate_ppt(data: PowerPointRequest):
             if apply_branding:
                 _style_body(body, brand)
         if apply_branding:
-            _add_logo(slide, prs, brand)
-            _add_footer(slide, prs, 0, 1, brand, date_text=date.today().strftime("%Y-%m-%d"))
+            _brand_slide(slide, prs, brand, company_name)
+            _add_footer(
+                slide,
+                prs,
+                0,
+                1,
+                brand,
+                date_text=date.today().strftime("%Y-%m-%d"),
+                company_name=company_name,
+                show_slide_number=True,
+            )
 
     file_id = f"{uuid.uuid4()}.pptx"
     file_path = os.path.join(RESULT_DIR, file_id)
@@ -1347,13 +1485,14 @@ def generate_pdf(data: PDFRequest):
         primary = (pl.get("brand") or {}).get("primary", "#0F766E")
         opts = pl.get("options") or {}
         page_size = opts.get("page_size", "A4")
-        footer_text = opts.get("footer_text", "")
+        footer_text = (opts.get("footer_text") or DEFAULT_COMPANY_NAME)
 
         html = Template(PDF_HTML_TMPL).render(
             page_size=page_size,
             footer_text=footer_text,
             primary=primary,
             logo_url=pl.get("logo_url"),
+            company_name=pl.get("company_name"),
             title=pl.get("title") or pl.get("titulo") or "Informe",
             meta=pl.get("meta") or {},
             sections=pl.get("sections") or [],
@@ -1373,8 +1512,35 @@ def generate_pdf(data: PDFRequest):
     data = sanitize(data.dict())
     pdf = FPDF()
     pdf.add_page()
+    logo_tmp = None
+    try:
+        with urllib.request.urlopen(DEFAULT_LOGO_URL) as resp:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.write(resp.read())
+            tmp.flush()
+            tmp.close()
+            logo_tmp = tmp.name
+    except Exception:
+        logo_tmp = None
+    if logo_tmp:
+        try:
+            pdf.image(logo_tmp, x=77, y=15, w=55)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.unlink(logo_tmp)
+            except Exception:
+                pass
+        pdf.ln(45)
+    else:
+        pdf.ln(10)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", style="B", size=16)
+    pdf.cell(200, 10, txt=DEFAULT_COMPANY_NAME, ln=True, align="C")
+    pdf.ln(4)
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=data["titulo"], ln=True, align='C')
+    pdf.cell(200, 10, txt=data["titulo"], ln=True, align="C")
     for line in data["contenido"]:
         pdf.cell(200, 10, txt=line, ln=True, align='L')
     if data.get("incluir_grafico"):
