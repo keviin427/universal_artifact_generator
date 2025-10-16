@@ -25,7 +25,7 @@ from pydantic import BaseModel
 # ── Third-party ────────────────────────────────────────────────────────────────
 import matplotlib.pyplot as plt
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from jinja2 import Template
@@ -192,9 +192,14 @@ RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 
-def _result_url(filename: str) -> str:
+def _result_url(filename: str, request: Optional[Request] = None) -> str:
     if PUBLIC_BASE_URL:
         return f"{PUBLIC_BASE_URL}/resultados/{filename}"
+    if request is not None:
+        try:
+            return str(request.url_for("get_file", filename=filename))
+        except Exception:
+            pass
     return f"/resultados/{filename}"
 
 DEFAULT_COMPANY_NAME = "Audit Consulting Group"
@@ -925,7 +930,7 @@ def _apply_excel_header_footer(ws):
             even_footer.left = DEFAULT_COMPANY_NAME
 
 @app.post("/generate_excel")
-def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
+def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     """
     Acepta:
     - v1: { "titulo": "...", "headers": [...], "rows": [...] }
@@ -1193,10 +1198,10 @@ def generate_excel(data: Union[ExcelRequestV2, ExcelRequest]):
     file_id = f"{safe_title}_{uuid.uuid4().hex[:8]}.xlsx"
     file_path = os.path.join(RESULT_DIR, file_id)
     wb.save(file_path)
-    return {"url": _result_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
 @app.post("/generate_word")
-def generate_word(data: WordRequest):
+def generate_word(request: Request, data: WordRequest):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = dict(data.placeholders or {})
@@ -1352,7 +1357,7 @@ def generate_word(data: WordRequest):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
-        return {"url": _result_url(file_id)}
+        return {"url": _result_url(file_id, request)}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
@@ -1381,12 +1386,12 @@ def generate_word(data: WordRequest):
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
-    return {"url": _result_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
 
 
 @app.post("/generate_ppt")
-def generate_ppt(data: PowerPointRequest):
+def generate_ppt(request: Request, data: PowerPointRequest):
     # Modo AVANZADO si hay 'type' en los slides o si trae 'title/subtitle/theme/options/template_id'
     advanced = bool(
         (data.slides and any(isinstance(s, dict) and "type" in s for s in data.slides))
@@ -1560,7 +1565,7 @@ def generate_ppt(data: PowerPointRequest):
         file_id = f"{uuid.uuid4()}.pptx"
         file_path = os.path.join(RESULT_DIR, file_id)
         prs.save(file_path)
-        return {"url": _result_url(file_id)}
+        return {"url": _result_url(file_id, request)}
 
     # ======= MODO LEGADO (tu implementación anterior con bullets) =======
     data = sanitize(data.dict())  # aquí sí podemos sanitizar
@@ -1665,12 +1670,12 @@ def generate_ppt(data: PowerPointRequest):
     file_id = f"{uuid.uuid4()}.pptx"
     file_path = os.path.join(RESULT_DIR, file_id)
     prs.save(file_path)
-    return {"url": _result_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
 
 
 @app.post("/generate_pdf")
-def generate_pdf(data: PDFRequest):
+def generate_pdf(request: Request, data: PDFRequest):
     # ====== MODO AVANZADO (HTML+CSS con WeasyPrint) ======
     if data.sections or data.brand or data.title or data.template_id or data.options:
         if HTML is None:
@@ -1752,11 +1757,11 @@ def generate_pdf(data: PDFRequest):
     file_id = f"{uuid.uuid4()}.pdf"
     file_path = os.path.join(RESULT_DIR, file_id)
     pdf.output(file_path)
-    return {"url": f"/resultados/{file_id}"}
+    return {"url": _result_url(file_id, request)}
 
 
 @app.post("/generate_canva")
-def generate_canva(data: CanvaRequest):
+def generate_canva(request: Request, data: CanvaRequest):
     # --- modo avanzado (plantilla SVG y opcional PNG) ---
     if any([data.title, data.theme, data.kpis, data.items, data.size, data.to_png]):
         payload = data.dict()   # no sanear: preserva colores hex, etc.
@@ -1767,13 +1772,13 @@ def generate_canva(data: CanvaRequest):
         with open(svg_path, "w", encoding="utf-8") as f:
             f.write(svg_str)
 
-        resp = {"url": _result_url(svg_id)}
+        resp = {"url": _result_url(svg_id, request)}
         if png_bytes:
             png_id = f"{uuid.uuid4()}.png"
             png_path = os.path.join(RESULT_DIR, png_id)
             with open(png_path, "wb") as f:
                 f.write(png_bytes)
-            resp["url_png"] = _result_url(png_id)
+            resp["url_png"] = _result_url(png_id, request)
         return resp
 
     # --- modo legado (tu comportamiento anterior) ---
@@ -1786,17 +1791,17 @@ def generate_canva(data: CanvaRequest):
         for i, el in enumerate(data.get('elementos') or []):
             f.write(f"<text x='10' y='{60+i*22}' style='font:500 14px Arial'>{el}</text>")
         f.write("</svg>")
-    return {"url": _result_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
 
 @app.post("/generate_powerbi")
-def generate_powerbi(data: PowerBIRequest):
+def generate_powerbi(request: Request, data: PowerBIRequest):
     data = sanitize(data.dict())
     df = pd.DataFrame(data["rows"], columns=data["headers"])
     file_id = f"{uuid.uuid4()}.csv"
     file_path = os.path.join(RESULT_DIR, file_id)
     df.to_csv(file_path, index=False)
-    return {"url": _result_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
 @app.post("/train_model")
 def train_model(data: TrainModelRequest):
@@ -1809,26 +1814,11 @@ def predict_model(data: PredictModelRequest):
     return {"status": "ok", "predictions": predictions}
 
 @app.get("/resultados/{filename}")
-def get_file(filename: str):
+def get_file(filename: str, request: Request):
     file_path = os.path.join(RESULT_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     response = FileResponse(file_path)
-    # si viene ?download=1 forzamos descarga
-    # FastAPI envía request global; usamos starlette Request a través de context
-    try:
-        from starlette.requests import Request
-        from starlette.concurrency import run_until_first_complete
-    except Exception:
-        Request = None
-    if Request is not None:
-        import inspect
-        frame = inspect.currentframe()
-        while frame:
-            if "request" in frame.f_locals and isinstance(frame.f_locals["request"], Request):
-                req = frame.f_locals["request"]
-                if req.query_params.get("download") == "1":
-                    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-                break
-            frame = frame.f_back
+    if request.query_params.get("download") == "1":
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
