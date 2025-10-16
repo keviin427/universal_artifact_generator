@@ -1217,7 +1217,7 @@ def generate_word(data: WordRequest):
             footer_cfg.setdefault("center", company_name)
         options["header"] = header_cfg
         options["footer"] = footer_cfg
-
+    
         doc = Document()
 
         # === Portada (si hay placeholders) ===
