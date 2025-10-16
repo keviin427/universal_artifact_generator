@@ -1202,251 +1202,192 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     file_id = f"{safe_title}_{uuid.uuid4().hex[:8]}.xlsx"
     file_path = os.path.join(RESULT_DIR, file_id)
     wb.save(file_path)
-    return {"url": _pdf_url(file_id)}
+    return {"url": _result_url(file_id, request)}
 
-@app.post("/generate_ppt")
-def generate_ppt(data: PowerPointRequest):
-    # Modo AVANZADO si hay 'type' en los slides o si trae 'title/subtitle/theme/options/template_id'
-    advanced = bool(
-        (data.slides and any(isinstance(s, dict) and "type" in s for s in data.slides))
-        or data.title or data.subtitle or data.theme or data.options or data.template_id
-    )
+@app.post("/generate_word")
+def generate_word(request: Request, data: WordRequest):
+    # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
+    if data.content or data.placeholders or data.options or data.template_id:
+        placeholders = dict(data.placeholders or {})
+        options = dict(data.options or {})
+        content = data.content or []
 
-    if advanced:
-        # NO sanitizamos (para no romper hex, URLs, etc.)
-        payload = data.dict()
+        company_name = placeholders.get("company_name") or DEFAULT_COMPANY_NAME
+        placeholders["company_name"] = company_name
+        logo_b64 = None
+        logo_url = None
+        placeholders.pop("logo_url", None)
+        placeholders.pop("logo_b64", None)
 
-        # === plantilla (mapping opcional) ===
-        template_map = {
-            # "corporate-v1": "templates/corporate_v1.pptx",
-        }
-        template_path = template_map.get(payload.get("template_id") or "", None)
-        prs = Presentation(template_path) if template_path else Presentation()
+        header_cfg = dict(options.get("header") or {})
+        if not header_cfg.get("left"):
+            header_cfg["left"] = company_name
+        if not header_cfg.get("right"):
+            header_cfg["right"] = "Página {PAGE} de {NUMPAGES}"
+        footer_cfg = dict(options.get("footer") or {})
+        if not (footer_cfg.get("left") or footer_cfg.get("center") or footer_cfg.get("right")):
+            footer_cfg["center"] = company_name
+        else:
+            footer_cfg.setdefault("center", company_name)
+        options["header"] = header_cfg
+        options["footer"] = footer_cfg
+    
+        doc = Document()
 
-        # === brand / theme ===
-        brand_data = payload.get("brand") or {}
-        brand = PPTBrand(**brand_data)
-        theme = payload.get("theme") or {}
-        if theme.get("primary"):
-            brand.primary = theme["primary"]
-        if theme.get("font"):
-            brand.title_font = theme["font"]
-            brand.body_font  = theme["font"]
+        # === Portada (si hay placeholders) ===
+        titulo = placeholders.get("titulo") or "Documento"
+        subtitulo = placeholders.get("subtitulo") or ""
+        autor = placeholders.get("autor") or ""
+        fecha = placeholders.get("fecha") or ""
 
-        # color de fondo global
-        global_bg = payload.get("background") or brand.secondary
+        ptitle = doc.add_paragraph()
+        ptitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = ptitle.add_run(titulo); r.bold = True; r.font.size = DocxPt(24)
 
-        # Portada si existe un slide de tipo cover (en el orden del payload)
-        slides_in = payload.get("slides") or []
-        for s in slides_in:
-            if not isinstance(s, dict) or s.get("type") != "cover":
-                continue
-            slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title
-            if global_bg: _set_background(slide, global_bg)
-            # Title / Subtitle
-            slide.shapes.title.text = payload.get("title") or payload.get("titulo") or "Presentación"
-            if len(slide.placeholders) > 1:
-                slide.placeholders[1].text = payload.get("subtitle", "") or ""
-            # estilos
-            if brand.primary:
-                _style_title(slide.shapes.title, brand)
-            _add_logo(slide, prs, brand)
+        if subtitulo:
+            ps = doc.add_paragraph()
+            ps.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
-        # Resto de slides en orden
-        for s in slides_in:
-            if isinstance(s, dict) and s.get("type") == "cover":
-                continue  # ya hecho
+        meta = []
+        if company_name:
+            meta.append(company_name)
+        if autor: meta.append(autor)
+        if fecha: meta.append(fecha)
+        if meta:
+            pm = doc.add_paragraph()
+            pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pm.add_run(" - ".join(meta)).italic = True
 
-            # === KPIs ===
-            if isinstance(s, dict) and s.get("type") == "kpis":
-                slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
-                if global_bg: _set_background(slide, global_bg)
-                slide.shapes.title.text = s.get("title") or "KPIs"
-                _style_title(slide.shapes.title, brand)
-                # caja de KPIs
-                tx = slide.shapes.add_textbox(Inches(1.0), Inches(1.8), Inches(8.0), Inches(3.0))
-                tf = tx.text_frame
-                tf.clear()
-                items = s.get("items", [])
-                for i, item in enumerate(items):
-                    p = tf.add_paragraph() if i else tf.paragraphs[0]
-                    p.text = f'{item.get("label","")}: {item.get("value","")}'
-                    p.level = 0
-                    p.font.name = brand.body_font or "Calibri"
-                    p.font.size = Pt(28)
-                    p.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
-                _add_logo(slide, prs, brand)
+        doc.add_page_break()
 
-            # === TABLA ===
-            elif isinstance(s, dict) and s.get("type") == "table":
-                slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
-                if global_bg: _set_background(slide, global_bg)
-                slide.shapes.title.text = s.get("title") or "Tabla"
-                _style_title(slide.shapes.title, brand)
+        # === TOC opcional ===
+        if options.get("toc", False):
+            _insert_toc(doc)
+            doc.add_page_break()
 
-                headers = s.get("headers", [])
-                rows = s.get("rows", [])
-                rows_n = len(rows) + 1
-                cols_n = max(1, len(headers))
-                table = slide.shapes.add_table(
-                    rows_n, cols_n, Inches(0.8), Inches(1.6),
-                    Inches(8.4), Inches(0.8 + rows_n * 0.35)
-                ).table
+        # === Encabezado/Pie + Logo/Watermark en TODAS las secciones ===
+        wm = None
+        wm_cfg = options.get("watermark")
+        if isinstance(wm_cfg, dict):
+            wm = wm_cfg.get("text")
+        _set_header_footer(
+            doc.sections[0],
+            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
+            footer_cfg or {"center": company_name},
+            logo_url=None, logo_b64=None, watermark_text=wm
+        )
 
-                # encabesados
-                for j, h in enumerate(headers):
-                    cell = table.cell(0, j)
-                    cell.text = str(h)
-                    ph = cell.text_frame.paragraphs[0]
-                    ph.font.bold = True
-                    ph.font.name = brand.body_font or "Calibri"
-                    ph.font.size = Pt(14)
-                    ph.font.color.rgb = _hex_to_rgb(brand.primary or "#112B49")
-                # filas
-                for i, row in enumerate(rows, start=1):
-                    for j, val in enumerate(row[:cols_n]):
-                        cell = table.cell(i, j)
-                        cell.text = str(val)
-                        p = cell.text_frame.paragraphs[0]
-                        p.font.name = brand.body_font or "Calibri"
-                        p.font.size = Pt(12)
-                _add_logo(slide, prs, brand)
+        # === Render del contenido con secciones/orientación cuando se requiera ===
+        # Mapeo "from": "table:1", "heading:2", etc.
+        sec_specs = options.get("sections", []) or []
+        # contador por tipo
+        counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
+        for item in content:
+            typ = item.get("type", "paragraph")
+            # ¿debemos insertar break de sección antes de este ítem?
+            for s in sec_specs:
+                src = s.get("from")
+                if src and ":" in src:
+                    t, n = src.split(":", 1)
+                    try:
+                        n = int(n)
+                    except Exception:
+                        n = None
+                    if t == typ and n == counters.get(typ, 0) + 1:
+                        # nueva sección (página nueva) con orientación indicada
+                        new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
+                        _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
+                        # heredar header/footer
+                        _set_header_footer(
+                            new_sec,
+                            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
+                            footer_cfg or {"center": company_name},
+                            logo_url=None, logo_b64=None, watermark_text=wm
+                        )
+                        break
 
-            # === CHART ===
-            elif isinstance(s, dict) and s.get("type") == "chart":
-                slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
-                if global_bg: _set_background(slide, global_bg)
-                slide.shapes.title.text = s.get("title") or "Gráfico"
-                _style_title(slide.shapes.title, brand)
+            # ahora insertamos el elemento
+            if typ == "heading":
+                level = int(item.get("level", 1))
+                text = str(item.get("text", ""))
+                para = doc.add_paragraph(text, style=f"Heading {min(max(level,1),3)}")
+                counters["heading"] += 1
 
-                data = CategoryChartData()
-                data.categories = s.get("categories", [])
-                for serie in s.get("series", []):
-                    data.add_series(serie.get("name","Serie"), serie.get("values", []))
+            elif typ == "paragraph":
+                text = str(item.get("text", ""))
+                para = doc.add_paragraph(text, style="Normal")
+                counters["paragraph"] += 1
 
-                slide.shapes.add_chart(
-                    XL_CHART_TYPE.COLUMN_CLUSTERED,
-                    Inches(1), Inches(1.6), Inches(8), Inches(4),
-                    data
-                )
-                _add_logo(slide, prs, brand)
+            elif typ == "table":
+                _render_table(doc, item)
+                counters["table"] += 1
 
-            # === fallback: slide texto simple (por compatibilidad)
+            elif typ == "list":
+                items = item.get("items", [])
+                ordered = bool(item.get("ordered", False))
+                style = "List Number" if ordered else "List Bullet"
+                for it in items:
+                    p = doc.add_paragraph(str(it), style=style)
+                counters["list"] += 1
+
+            elif typ == "image":
+                # admite url o base64
+                width_in = float(item.get("width_in", 5))
+                if item.get("image_b64"):
+                    try:
+                        img = io.BytesIO(b64decode(item["image_b64"]))
+                        doc.add_picture(img, width=DocxInches(width_in))
+                    except Exception:
+                        pass
+                elif item.get("url") and (item["url"].startswith("http://") or item["url"].startswith("https://")):
+                    try:
+                        with urllib.request.urlopen(item["url"]) as resp:
+                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                            tmp.write(resp.read()); tmp.flush()
+                            doc.add_picture(tmp.name, width=DocxInches(width_in))
+                    except Exception:
+                        pass
+                counters["image"] += 1
+
             else:
-                # soporta strings o dicts sin 'type' (antiguo)
-                if isinstance(s, str):
-                    s = {"title": s, "bullets": []}
-                slide = prs.slides.add_slide(prs.slide_layouts[1])  # Title and Content
-                if global_bg: _set_background(slide, global_bg)
-                slide.shapes.title.text = s.get("title", "Slide")
-                _style_title(slide.shapes.title, brand)
-                body = slide.placeholders[1].text_frame
-                body.clear()
-                for b in (s.get("bullets", []) or []):
-                    p = body.add_paragraph()
-                    p.text = b
-                    p.level = 0
-                    p.font.name = brand.body_font or "Calibri"
-                    p.font.size = Pt(20)
-                _style_body(body, brand)
-                _add_logo(slide, prs, brand)
-
-        # Footer (números + fecha)
-        total = len(prs.slides)
-        show_nums = (payload.get("options") or {}).get("slide_numbers", True)
-        footer_date = date.today().strftime("%Y-%m-%d")
-        if show_nums:
-            for i, sl in enumerate(prs.slides):
-                _add_footer(sl, prs, i, total, brand, date_text=footer_date)
-
-        file_id = f"{uuid.uuid4()}.pptx"
+                # fallback
+                doc.add_paragraph(str(item))
+        
+        # === Guardar ===
+        file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
-        prs.save(file_path)
-        return {"url": f"/resultados/{file_id}"}
+        doc.save(file_path)
+        return {"url": _result_url(file_id, request)}
 
-    # ======= MODO LEGADO (tu implementación anterior con bullets) =======
-    data = sanitize(data.dict())  # aquí sí podemos sanitizar
-    apply_branding = data.get("apply_branding", True)
-
-    # normaliza/instancia brand
-    brand_data = data.get("brand") or {}
-    brand = PPTBrand(**brand_data)
-
-    prs = Presentation()
-
-    # normalizar title si llega como lista / strings sueltos como slides
-    slides_norm = []
-    for s in data.get("slides", []) or []:
-        if isinstance(s, str):
-            slides_norm.append({"title": s, "bullets": []})
-        elif isinstance(s, dict):
-            t = s.get("title")
-            if isinstance(t, list):
-                s["title"] = " ".join(map(str, t))
-            if s.get("bullets") is None:
-                s["bullets"] = []
-            slides_norm.append(s)
-    if slides_norm:
-        data["slides"] = slides_norm
-
-    if data.get("slides"):
-        for i, s in enumerate(data["slides"]):
-            slide = prs.slides.add_slide(prs.slide_layouts[1])  # Title and Content
-            if apply_branding:
-                _set_background(slide, data.get("background") or brand.secondary)
-            slide.shapes.title.text = s.get("title", "Slide")
-            if apply_branding:
-                _style_title(slide.shapes.title, brand)
-
-            body = slide.placeholders[1].text_frame
-            body.clear()
-            for bullet in s.get("bullets", []):
-                p = body.add_paragraph()
-                p.text = bullet
-                if apply_branding:
-                    p.level = 0
-                    p.font.name = brand.body_font
-                    p.font.size = Pt(20)
-
-            if apply_branding:
-                _add_logo(slide, prs, brand)
-                _style_body(body, brand)
-        # números en modo legado
-        if apply_branding:
-            total = len(prs.slides)
-            for i, sl in enumerate(prs.slides):
-                _add_footer(sl, prs, i, total, brand, date_text=date.today().strftime("%Y-%m-%d"))
-
-    else:
-        # slide de título con bullets
-        slide = prs.slides.add_slide(prs.slide_layouts[0])
-        if apply_branding:
-            _set_background(slide, data.get("background") or brand.secondary)
-        slide.shapes.title.text = data.get("titulo") or "Presentación"
-        if apply_branding:
-            _style_title(slide.shapes.title, brand)
-
-        if data.get("bullets"):
-            body = slide.placeholders[1].text_frame
-            body.clear()
-            for b in data["bullets"]:
-                p = body.add_paragraph()
-                p.text = b
-                if apply_branding:
-                    p.level = 0
-                    p.font.name = brand.body_font
-                    p.font.size = Pt(20)
-            if apply_branding:
-                _style_body(body, brand)
-        if apply_branding:
-            _add_logo(slide, prs, brand)
-            _add_footer(slide, prs, 0, 1, brand, date_text=date.today().strftime("%Y-%m-%d"))
-
-    file_id = f"{uuid.uuid4()}.pptx"
+    # ===== MODO LEGADO (tu comportamiento anterior) =====
+    data = sanitize(data.dict())  # aquí sí sanitizamos como antes
+    doc = Document()
+    _set_header_footer(
+        doc.sections[0],
+        {"left": DEFAULT_COMPANY_NAME, "right": "Pagina {PAGE} de {NUMPAGES}"},
+        {"center": DEFAULT_COMPANY_NAME},
+        logo_url=None, logo_b64=None
+    )
+    brand_para = doc.add_paragraph(DEFAULT_COMPANY_NAME)
+    brand_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_heading(data["titulo"], 0)
+    for sec in data["secciones"]:
+        doc.add_paragraph(sec)
+    if data.get("tablas"):
+        for tabla in data["tablas"]:
+            t = doc.add_table(rows=1, cols=len(tabla[0]))
+            hdr_cells = t.rows[0].cells
+            for i, h in enumerate(tabla[0]):
+                hdr_cells[i].text = h
+            for row in tabla[1:]:
+                row_cells = t.add_row().cells
+                for i, cell in enumerate(row):
+                    row_cells[i].text = cell
+    file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
-    prs.save(file_path)
-    return {"url": f"/resultados/{file_id}"}
-
+    doc.save(file_path)
+    return {"url": _result_url(file_id, request)}
 
 
 
