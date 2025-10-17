@@ -565,7 +565,9 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
             _add_page_numbering(pr, right)
 
     # Logo (URL o base64) al encabezado, alineado a la derecha
-    logo_bytes = _load_logo_bytes(logo_url, logo_b64)
+    logo_bytes = None
+    if logo_url or logo_b64:
+        logo_bytes = _load_logo_bytes(logo_url, logo_b64)
     if logo_bytes:
         p_logo = header.add_paragraph()
         p_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -1205,33 +1207,13 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     return {"url": _result_url(file_id, request)}
 
 @app.post("/generate_word")
-def generate_word(request: Request, data: WordRequest):
+def generate_word(data: WordRequest):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
-        placeholders = dict(data.placeholders or {})
-        options = dict(data.options or {})
+        placeholders = data.placeholders or {}
+        options = data.options or {}
         content = data.content or []
 
-        company_name = placeholders.get("company_name") or DEFAULT_COMPANY_NAME
-        placeholders["company_name"] = company_name
-        logo_b64 = None
-        logo_url = None
-        placeholders.pop("logo_url", None)
-        placeholders.pop("logo_b64", None)
-
-        header_cfg = dict(options.get("header") or {})
-        if not header_cfg.get("left"):
-            header_cfg["left"] = company_name
-        if not header_cfg.get("right"):
-            header_cfg["right"] = "Página {PAGE} de {NUMPAGES}"
-        footer_cfg = dict(options.get("footer") or {})
-        if not (footer_cfg.get("left") or footer_cfg.get("center") or footer_cfg.get("right")):
-            footer_cfg["center"] = company_name
-        else:
-            footer_cfg.setdefault("center", company_name)
-        options["header"] = header_cfg
-        options["footer"] = footer_cfg
-    
         doc = Document()
 
         # === Portada (si hay placeholders) ===
@@ -1250,14 +1232,12 @@ def generate_word(request: Request, data: WordRequest):
             rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
         meta = []
-        if company_name:
-            meta.append(company_name)
         if autor: meta.append(autor)
         if fecha: meta.append(fecha)
         if meta:
             pm = doc.add_paragraph()
             pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            pm.add_run(" - ".join(meta)).italic = True
+            pm.add_run(" – ".join(meta)).italic = True
 
         doc.add_page_break()
 
@@ -1267,15 +1247,17 @@ def generate_word(request: Request, data: WordRequest):
             doc.add_page_break()
 
         # === Encabezado/Pie + Logo/Watermark en TODAS las secciones ===
+        logo_url = placeholders.get("logo_url")
+        logo_b64 = placeholders.get("logo_b64")
         wm = None
         wm_cfg = options.get("watermark")
         if isinstance(wm_cfg, dict):
             wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
-            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
-            footer_cfg or {"center": company_name},
-            logo_url=None, logo_b64=None, watermark_text=wm
+            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+            options.get("footer", {"center": ""}),
+            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
         # === Render del contenido con secciones/orientación cuando se requiera ===
@@ -1301,9 +1283,9 @@ def generate_word(request: Request, data: WordRequest):
                         # heredar header/footer
                         _set_header_footer(
                             new_sec,
-                            header_cfg or {"right": "Pagina {PAGE} de {NUMPAGES}"},
-                            footer_cfg or {"center": company_name},
-                            logo_url=None, logo_b64=None, watermark_text=wm
+                            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+                            options.get("footer", {"center": ""}),
+                            logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
                         )
                         break
 
@@ -1358,19 +1340,11 @@ def generate_word(request: Request, data: WordRequest):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
-        return {"url": _result_url(file_id, request)}
+        return {"url": f"/resultados/{file_id}"}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
-    _set_header_footer(
-        doc.sections[0],
-        {"left": DEFAULT_COMPANY_NAME, "right": "Pagina {PAGE} de {NUMPAGES}"},
-        {"center": DEFAULT_COMPANY_NAME},
-        logo_url=None, logo_b64=None
-    )
-    brand_para = doc.add_paragraph(DEFAULT_COMPANY_NAME)
-    brand_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_heading(data["titulo"], 0)
     for sec in data["secciones"]:
         doc.add_paragraph(sec)
@@ -1387,7 +1361,7 @@ def generate_word(request: Request, data: WordRequest):
     file_id = f"{uuid.uuid4()}.docx"
     file_path = os.path.join(RESULT_DIR, file_id)
     doc.save(file_path)
-    return {"url": _result_url(file_id, request)}
+    return {"url": f"/resultados/{file_id}"}
 
 
 
