@@ -1,4 +1,4 @@
-# ââ Standard library ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# ── Standard library ────────────────────────────────────────────────────────────
 import base64
 import io
 import os
@@ -22,7 +22,7 @@ from base64 import b64decode
 from typing import List, Dict, Optional, Union, Any
 from pydantic import BaseModel
 
-# ââ Third-party ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# ── Third-party ────────────────────────────────────────────────────────────────
 import matplotlib.pyplot as plt
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request
@@ -54,20 +54,7 @@ from pptx.util import Inches, Pt
 # python-docx (Word)
 from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION_START
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
-try:
-    from docx.image.exceptions import (
-        UnrecognizedImageError,
-        UnexpectedEndOfFileError as DocxUnexpectedEndOfFileError,
-    )
-    from docx.image.image import Image as DocxImage
-except Exception:  # pragma: no cover
-    DocxImage = None  # type: ignore
-    class DocxUnexpectedEndOfFileError(Exception):  # type: ignore
-        pass
-    class UnrecognizedImageError(Exception):  # type: ignore
-        pass
-
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches as DocxInches, Pt as DocxPt, RGBColor as DocxRGBColor
@@ -75,7 +62,7 @@ from docx.shared import Inches as DocxInches, Pt as DocxPt, RGBColor as DocxRGBC
 # PDF
 from fpdf import FPDF
 try:
-    from weasyprint import HTML, CSS  # opcional (si no estÃ¡, seguimos con FPDF)
+    from weasyprint import HTML, CSS  # opcional (si no está, seguimos con FPDF)
 except Exception:
     HTML = None
 
@@ -90,48 +77,34 @@ def clean_text(text):
         return re.sub(r"[^\w\s\-.,()#]", "", text)
     return text
 
-def _is_valid_image(blob: Optional[bytes]) -> bool:
-    if not blob:
-        return False
-    if DocxImage is None:
-        return True
-    try:
-        DocxImage.from_blob(blob)
-        return True
-    except (UnrecognizedImageError, DocxUnexpectedEndOfFileError, ValueError, OSError):
-        return False
-
 def _load_logo_bytes(logo_url: Optional[str] = None, logo_b64: Optional[str] = None) -> Optional[bytes]:
     """Devuelve los bytes del logo priorizando base64/url y con fallback corporativo."""
-    candidates: List[bytes] = []
     if logo_b64:
         try:
-            raw_b64 = logo_b64.split(",", 1)[1] if logo_b64.startswith("data:") else logo_b64
-            candidates.append(b64decode(raw_b64))
+            if logo_b64.startswith("data:"):
+                logo_b64 = logo_b64.split(",", 1)[1]
+            return b64decode(logo_b64)
         except Exception:
             pass
-    url = (logo_url or "").strip()
+    url = logo_url or ""
     if url.startswith("data:"):
         try:
-            candidates.append(b64decode(url.split(",", 1)[1]))
+            return b64decode(url.split(",", 1)[1])
         except Exception:
-            pass
-    elif url.startswith("http"):
+            return b64decode(DEFAULT_LOGO_B64)
+    if url.startswith("http"):
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:
-                candidates.append(resp.read())
+                return resp.read()
         except Exception:
-            pass
-    elif url:
+            return b64decode(DEFAULT_LOGO_B64)
+    if url:
         try:
             with open(url, "rb") as fh:
-                candidates.append(fh.read())
+                return fh.read()
         except Exception:
-            pass
-    for blob in candidates:
-        if _is_valid_image(blob):
-            return blob
-    return DEFAULT_LOGO_BYTES if _is_valid_image(DEFAULT_LOGO_BYTES) else None
+            return b64decode(DEFAULT_LOGO_B64)
+    return b64decode(DEFAULT_LOGO_B64)
 
 def _logo_to_data_uri(logo_url: Optional[str] = None, logo_b64: Optional[str] = None) -> str:
     """Retorna el logo en formato data URI, con fallback corporativo."""
@@ -143,19 +116,16 @@ def _logo_to_data_uri(logo_url: Optional[str] = None, logo_b64: Optional[str] = 
     except Exception:
         return DEFAULT_LOGO_DATA_URI
 
-def _add_docx_image(run, image_bytes: bytes, width_in: float = 1.6) -> bool:
+def _add_docx_image(run, image_bytes: bytes, width_in: float = 1.6):
     """Adjunta una imagen a un run de docx usando un archivo temporal."""
     if not image_bytes:
-        return False
+        return
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     try:
         tmp.write(image_bytes)
         tmp.flush()
         tmp.close()
         run.add_picture(tmp.name, width=DocxInches(width_in))
-        return True
-    except (DocxUnexpectedEndOfFileError, UnrecognizedImageError, ValueError, OSError):
-        return False
     finally:
         try:
             os.unlink(tmp.name)
@@ -163,7 +133,7 @@ def _add_docx_image(run, image_bytes: bytes, width_in: float = 1.6) -> bool:
             pass
 
 def _render_cover(doc, placeholders: dict, brand: dict):
-    """Crea una portada simple centrada con tÃ­tulo/subtÃ­tulo/autor/fecha."""
+    """Crea una portada simple centrada con título/subtítulo/autor/fecha."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt as DocxPt
 
@@ -192,10 +162,10 @@ def _render_cover(doc, placeholders: dict, brand: dict):
     if meta:
         p3 = doc.add_paragraph()
         p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r3 = p3.add_run(" â ".join(meta))
+        r3 = p3.add_run(" – ".join(meta))
         r3.italic = True
 
-    # salto de pÃ¡gina tras portada
+    # salto de página tras portada
     doc.add_page_break()
 
 
@@ -222,7 +192,6 @@ RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 PDF_BASE_URL = (os.getenv("PDF_BASE_URL") or "https://universal-artifact-generator.onrender.com").rstrip("/")
-EMU_PER_INCH = 914400
 
 def _result_url(filename: str, request: Optional[Request] = None) -> str:
     if PUBLIC_BASE_URL:
@@ -317,7 +286,6 @@ DEFAULT_LOGO_B64 = (
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMB/"
     "8n+xJtMt7jn4mQAAAABJRU5ErkJggg=="
 )
-DEFAULT_LOGO_BYTES = b64decode(DEFAULT_LOGO_B64)
 DEFAULT_LOGO_DATA_URI = f"data:image/png;base64,{DEFAULT_LOGO_B64}"
 
 from typing import List, Dict, Optional, Union
@@ -329,7 +297,7 @@ class ExcelRequest(BaseModel):
     formulas: Optional[Dict[str, Union[str, List[str]]]] = None
     hojas: Optional[List[Union[Dict[str, List[List]], str]]] = None
 
-# v2 ârobustoâ
+# v2 “robusto”
 class ExcelData(BaseModel):
     headers: List[str]
     rows: List[List[Any]]
@@ -377,7 +345,7 @@ class PowerPointSlide(BaseModel):
     title: Union[str, List[str]] = "Slide"
     bullets: Optional[List[str]] = []
 
-# Acepta cada item de 'slides' como objeto PowerPointSlide O como string (tÃ­tulo suelto)
+# Acepta cada item de 'slides' como objeto PowerPointSlide O como string (título suelto)
 class PowerPointRequest(BaseModel):
     # NUEVO (avanzado)
     template_id: Optional[str] = None
@@ -476,7 +444,7 @@ def _add_logo(slide, prs, brand: PPTBrand):
         stream = io.BytesIO(logo_bytes)
         stream.seek(0)
         picture = slide.shapes.add_picture(stream, 0, 0)
-        # escalar manteniendo proporciÃ³n
+        # escalar manteniendo proporción
         target_height = Inches(0.9)
         scale = target_height / picture.height
         picture.height = target_height
@@ -542,13 +510,13 @@ def _add_simple_field(paragraph, field_instr: str):
     fld.set(qn('w:instr'), field_instr)
     r = OxmlElement('w:r')
     t = OxmlElement('w:t')
-    t.text = ""  # Word calcularÃ¡ el valor
+    t.text = ""  # Word calculará el valor
     r.append(t)
     fld.append(r)
     paragraph._p.append(fld)
 
-def _add_page_numbering(paragraph, pattern: str = "PÃ¡gina {PAGE} de {NUMPAGES}"):
-    """Inserta la numeraciÃ³n usando campos. Acepta con o sin llaves."""
+def _add_page_numbering(paragraph, pattern: str = "Página {PAGE} de {NUMPAGES}"):
+    """Inserta la numeración usando campos. Acepta con o sin llaves."""
     # normaliza tokens con o sin { }
     pattern = pattern.replace("{PAGE}", "PAGE").replace("{NUMPAGES}", "NUMPAGES")
     parts = pattern.split("PAGE")
@@ -565,112 +533,74 @@ def _add_page_numbering(paragraph, pattern: str = "PÃ¡gina {PAGE} de {NUMPAGES
     if len(parts2) > 1:
         paragraph.add_run(parts2[1])
 
-def _paragraph_add_text_or_fields(paragraph, text: str):
-    if not text:
-        return
-    tokens = ("{PAGE}", "{NUMPAGES}", "PAGE", "NUMPAGES")
-    if any(tok in text for tok in tokens):
-        _add_page_numbering(paragraph, text)
-    else:
-        paragraph.add_run(text)
-
 def _clear_section_container(container):
-    """Elimina pÃ¡rrafos/tablas existentes en encabezados o pies antes de reconstruirlos."""
+    """Elimina párrafos/tablas existentes en encabezados o pies antes de reconstruirlos."""
     for tbl in list(container.tables):
         tbl._element.getparent().remove(tbl._element)
     for p in list(container.paragraphs):
         p._element.getparent().remove(p._element)
 
 def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg: Optional[Dict[str, str]], logo_url=None, logo_b64=None, watermark_text=None):
-    header_cfg = header_cfg or {}
-    footer_cfg = footer_cfg or {}
-
+    # Encabezado (tres zonas simuladas con alineación)
     header = section.header
     _clear_section_container(header)
-    logo_bytes = _load_logo_bytes(logo_url, logo_b64) or DEFAULT_LOGO_BYTES
-    usable_width_in = max(0.1, (section.page_width - section.left_margin - section.right_margin) / EMU_PER_INCH) if EMU_PER_INCH else 6
-    header_para = header.add_paragraph()
-    header_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    pf = header_para.paragraph_format
-    pf.space_before = DocxPt(0)
-    pf.space_after = DocxPt(0)
-    pf.tab_stops.add_tab_stop(DocxInches(usable_width_in), WD_TAB_ALIGNMENT.RIGHT)
+    if header_cfg:
+        p = header.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        left = header_cfg.get("left", "")
+        center = header_cfg.get("center", "")
+        right = header_cfg.get("right", "Página {PAGE} de {NUMPAGES}")
+        # Left
+        if left:
+            run = p.add_run(left)
+        # Center
+        if center:
+            pc = header.add_paragraph()
+            pc.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pc.add_run(center)
+        # Right con numeración
+        if right:
+            pr = header.add_paragraph()
+            pr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _add_page_numbering(pr, right)
 
-    has_logo = False
+    # Logo (URL o base64) al encabezado, alineado a la derecha
+    logo_bytes = None
+    if logo_url or logo_b64:
+        logo_bytes = _load_logo_bytes(logo_url, logo_b64)
     if logo_bytes:
-        run_logo = header_para.add_run()
-        has_logo = _add_docx_image(run_logo, logo_bytes, width_in=1.3)
-        if not has_logo and logo_bytes != DEFAULT_LOGO_BYTES:
-            fallback_run = header_para.add_run()
-            has_logo = _add_docx_image(fallback_run, DEFAULT_LOGO_BYTES, width_in=1.3)
-    elif DEFAULT_LOGO_BYTES:
-        run_logo = header_para.add_run()
-        has_logo = _add_docx_image(run_logo, DEFAULT_LOGO_BYTES, width_in=1.3)
+        p_logo = header.add_paragraph()
+        p_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run_logo = p_logo.add_run()
+        _add_docx_image(run_logo, logo_bytes, width_in=1.6)
 
-    left_text = header_cfg.get("left", "")
-    if left_text:
-        if has_logo:
-            header_para.add_run(" ")
-        header_para.add_run(left_text)
-
-    right_text = header_cfg.get("right", "Página {PAGE} de {NUMPAGES}")
-    if right_text:
-        header_para.add_run("	")
-        _add_page_numbering(header_para, right_text)
-
-    center_text = header_cfg.get("center", "")
-    if center_text:
-        p_center = header.add_paragraph()
-        p_center.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        fmt_center = p_center.paragraph_format
-        fmt_center.space_before = DocxPt(0)
-        fmt_center.space_after = DocxPt(0)
-        _paragraph_add_text_or_fields(p_center, center_text)
-
+    # Watermark simple: texto grande y gris en el encabezado (no “debajo del texto” real, pero visible)
     if watermark_text:
         pw = header.add_paragraph()
         pw.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        fmt_w = pw.paragraph_format
-        fmt_w.space_before = DocxPt(0)
-        fmt_w.space_after = DocxPt(0)
         run = pw.add_run(watermark_text)
         run.font.size = DocxPt(48)
         run.font.color.rgb = DocxRGBColor(0xB4, 0xB4, 0xB4)
 
-    footer = section.footer
-    _clear_section_container(footer)
-
-    left_footer = footer_cfg.get("left", "")
-    center_footer = footer_cfg.get("center", "")
-    right_footer = footer_cfg.get("right", "")
-
-    if left_footer:
-        p_left = footer.add_paragraph()
-        p_left.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_left = p_left.paragraph_format
-        pf_left.space_before = DocxPt(0)
-        pf_left.space_after = DocxPt(0)
-        _paragraph_add_text_or_fields(p_left, left_footer)
-
-    if center_footer:
-        p_center_f = footer.add_paragraph()
-        p_center_f.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        pf_center = p_center_f.paragraph_format
-        pf_center.space_before = DocxPt(0)
-        pf_center.space_after = DocxPt(0)
-        _paragraph_add_text_or_fields(p_center_f, center_footer)
-
-    if right_footer:
-        p_right = footer.add_paragraph()
-        p_right.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        pf_right = p_right.paragraph_format
-        pf_right.space_before = DocxPt(0)
-        pf_right.space_after = DocxPt(0)
-        _paragraph_add_text_or_fields(p_right, right_footer)
+    # Pie
+    if footer_cfg:
+        footer = section.footer
+        _clear_section_container(footer)
+        p = footer.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        center = footer_cfg.get("center", "")
+        left = footer_cfg.get("left", "")
+        right = footer_cfg.get("right", "")
+        if left:
+            pl = footer.add_paragraph(); pl.alignment = WD_ALIGN_PARAGRAPH.LEFT; pl.add_run(left)
+        if center:
+            pc = footer.add_paragraph(); pc.alignment = WD_ALIGN_PARAGRAPH.CENTER; pc.add_run(center)
+        if right:
+            pr = footer.add_paragraph(); pr.alignment = WD_ALIGN_PARAGRAPH.RIGHT; pr.add_run(right)
 
 def _insert_toc(doc):
     p = doc.add_paragraph()
-    _add_simple_field(p, r'TOC \o "1-3" \h \z \u')  # Word lo actualizarÃ¡ al abrir
+    _add_simple_field(p, r'TOC \o "1-3" \h \z \u')  # Word lo actualizará al abrir
 
 def _apply_section_orientation(section, orientation: str):
     if orientation.lower() == "landscape":
@@ -711,7 +641,7 @@ def _to_data_uri(img: Optional[str]) -> Optional[str]:
                 b64 = base64.b64encode(b).decode("ascii")
                 return f"data:{mime};base64,{b64}"
         except Exception:
-            return img  # WeasyPrint tambiÃ©n puede resolver URLs si hay red
+            return img  # WeasyPrint también puede resolver URLs si hay red
     return img
 
 def _prepare_pdf_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -731,7 +661,7 @@ def _prepare_pdf_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     meta.setdefault("company_name", company_name)
     pl["meta"] = meta
 
-    # ids para headings + convertir imÃ¡genes a data URI
+    # ids para headings + convertir imágenes a data URI
     sections = []
     hcount = 0
     for s in (pl.get("sections") or []):
@@ -795,7 +725,7 @@ def _build_svg_panel(payload: Dict[str, Any], to_png: bool = False):
         )
     kpi_cards = "\n".join(cards)
 
-    # Lista de items (hasta 8 lÃ­neas)
+    # Lista de items (hasta 8 líneas)
     items = (payload.get("items") or [])[:8]
     y0 = 280
     lines = []
@@ -820,7 +750,7 @@ def _build_svg_panel(payload: Dict[str, Any], to_png: bool = False):
         if cairosvg is None:
             raise HTTPException(
                 status_code=500,
-                detail='CairoSVG no estÃ¡ instalado. Agrega "cairosvg" a requirements.txt e instala.'
+                detail='CairoSVG no está instalado. Agrega "cairosvg" a requirements.txt e instala.'
             )
         png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=w, output_height=h)
     return svg, png_bytes
@@ -850,7 +780,7 @@ PDF_HTML_TMPL = r"""
     size: {{ page_size }};
     margin: 18mm 16mm 20mm 16mm;
     @bottom-center {
-      content: "{{ footer_text }}" " Â· PÃ¡g. " counter(page) " de " counter(pages);
+      content: "{{ footer_text }}" " · Pág. " counter(page) " de " counter(pages);
       font-size: 10pt; color: #666;
     }
   }
@@ -885,7 +815,7 @@ PDF_HTML_TMPL = r"""
     {% if logo_url %}<img class="logo" src="{{ logo_url }}">{% endif %}
     <div class="company">{{ company_name }}</div>
     <h1>{{ title }}</h1>
-    <div>{{ meta.autor or "" }}{% if meta.autor and meta.fecha %} Â· {% endif %}{{ meta.fecha or "" }}</div>
+    <div>{{ meta.autor or "" }}{% if meta.autor and meta.fecha %} · {% endif %}{{ meta.fecha or "" }}</div>
   </div>
 </div>
 
@@ -1021,7 +951,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         opts: Dict[str, Any] = {}
     else:
         # ExcelRequestV2
-        d = data.dict()  # no sanitizo fÃ³rmulas ni formatos
+        d = data.dict()  # no sanitizo fórmulas ni formatos
         titulo = d.get("titulo") or "Libro"
         headers = d["data"]["headers"]
         rows = d["data"].get("rows") or []
@@ -1042,7 +972,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     print_orient   = (print_opts.get("orientation") or "landscape").lower()
     fit_to_width   = int(print_opts.get("fit_to_width", 1))
 
-    # === A partir de aquÃ­ es tu lÃ³gica original (con pequeÃ±os puntos de entrada) ===
+    # === A partir de aquí es tu lógica original (con pequeños puntos de entrada) ===
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -1065,7 +995,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         c.fill = header_fill
         c.font = header_font
 
-    # Congelar segÃºn options o default branding
+    # Congelar según options o default branding
     if freeze_addr:
         ws_det.freeze_panes = freeze_addr
     else:
@@ -1082,7 +1012,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         except Exception:
             pass
 
-    # Detectar columnas numÃ©ricas
+    # Detectar columnas numéricas
     def is_number(v):
         try:
             float(v); return True
@@ -1094,7 +1024,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         if any(is_number(r[j]) for r in rows if j < len(r)):
             numeric_cols.add(j)
 
-    # Formatos automÃ¡ticos heurÃ­sticos
+    # Formatos automáticos heurísticos
     currency_headers = {"venta", "ventas", "costo", "costos", "margen", "importe", "monto", "total"}
     percent_headers  = {"%", "porcentaje", "ratio", "margen %"}
     from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE_00
@@ -1117,7 +1047,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
             for cell in ws_det[rng]:
                 for c in cell: c.number_format = fmt
 
-    # Tabla con o sin totales (segÃºn options)
+    # Tabla con o sin totales (según options)
     last_row = ws_det.max_row
     last_col = ws_det.max_column
     if totals_row:
@@ -1141,7 +1071,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
 
     last_row = ws_det.max_row
 
-    # Formato condicional sobre la Ãºltima numÃ©rica (si existe)
+    # Formato condicional sobre la última numérica (si existe)
     num_cols_sorted = sorted(list(numeric_cols))
     if num_cols_sorted:
         last_num_col = num_cols_sorted[-1] + 1
@@ -1151,7 +1081,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
             ColorScaleRule(start_type="min", mid_type="percentile", mid_value=50, end_type="max")
         )
 
-    # ValidaciÃ³n de datos simple sobre col A (si aplica)
+    # Validación de datos simple sobre col A (si aplica)
     colA_vals = [str(r[0]) for r in rows if len(r) > 0]
     uniques = sorted(set(colA_vals))
     if 1 <= len(uniques) <= 20 and sum(len(u) for u in uniques) < 240:
@@ -1159,7 +1089,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         ws_det.add_data_validation(dv)
         dv.add(f"A{data_start_idx}:A{last_row}")
 
-    # Config impresiÃ³n (override con options.print si vino)
+    # Config impresión (override con options.print si vino)
     for ws in [ws_det]:
         ws.page_setup.orientation = "portrait" if print_orient == "portrait" else "landscape"
         ws.page_setup.fitToWidth = fit_to_width
@@ -1233,8 +1163,8 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     except Exception:
         pass
 
-    # ====== GrÃ¡ficos ======
-    ws_chart = wb.create_sheet("GrÃ¡ficos")
+    # ====== Gráficos ======
+    ws_chart = wb.create_sheet("Gráficos")
     _apply_excel_header_footer(ws_chart)
     ws_chart["A1"] = DEFAULT_COMPANY_NAME
     ws_chart["A1"].hyperlink = DEFAULT_LOGO_URL
@@ -1247,7 +1177,7 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     if len(headers) >= 2 and 1 in numeric_cols and cats is not None:
         vals = Reference(ws_res, min_col=2, min_row=1, max_row=ws_res.max_row)
         chart = BarChart()
-        chart.title = "Serie principal por categorÃ­a"
+        chart.title = "Serie principal por categoría"
         chart.add_data(vals, titles_from_data=True)
         chart.set_categories(cats)
         chart.y_axis.title = headers[1]
@@ -1277,27 +1207,12 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     return {"url": _result_url(file_id, request)}
 
 @app.post("/generate_word")
-def generate_word(request: Request, data: WordRequest):
+def generate_word(data: WordRequest):
     # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
         content = data.content or []
-
-        company_name = placeholders.get("company_name") or DEFAULT_COMPANY_NAME
-        placeholders["company_name"] = company_name
-        logo_b64 = placeholders.get("logo_b64")
-        logo_url = placeholders.get("logo_url")
-        if not logo_b64 and not logo_url:
-            logo_url = DEFAULT_LOGO_URL
-            placeholders["logo_url"] = logo_url
-
-        header_cfg = dict(options.get("header") or {})
-        header_cfg.setdefault("left", "")
-        header_cfg.setdefault("center", "")
-        header_cfg.setdefault("right", "Página {PAGE} de {NUMPAGES}")
-        footer_cfg = dict(options.get("footer") or {})
-        footer_cfg.setdefault("center", company_name)
 
         doc = Document()
 
@@ -1317,13 +1232,12 @@ def generate_word(request: Request, data: WordRequest):
             rs = ps.add_run(subtitulo); rs.font.size = DocxPt(14)
 
         meta = []
-        if company_name: meta.append(company_name)
         if autor: meta.append(autor)
         if fecha: meta.append(fecha)
         if meta:
             pm = doc.add_paragraph()
             pm.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            pm.add_run(" â ".join(meta)).italic = True
+            pm.add_run(" – ".join(meta)).italic = True
 
         doc.add_page_break()
 
@@ -1341,19 +1255,19 @@ def generate_word(request: Request, data: WordRequest):
             wm = wm_cfg.get("text")
         _set_header_footer(
             doc.sections[0],
-            header_cfg,
-            footer_cfg,
+            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+            options.get("footer", {"center": ""}),
             logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
-        # === Render del contenido con secciones/orientaciÃ³n cuando se requiera ===
+        # === Render del contenido con secciones/orientación cuando se requiera ===
         # Mapeo "from": "table:1", "heading:2", etc.
         sec_specs = options.get("sections", []) or []
         # contador por tipo
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
         for item in content:
             typ = item.get("type", "paragraph")
-            # Â¿debemos insertar break de secciÃ³n antes de este Ã­tem?
+            # ¿debemos insertar break de sección antes de este ítem?
             for s in sec_specs:
                 src = s.get("from")
                 if src and ":" in src:
@@ -1363,14 +1277,14 @@ def generate_word(request: Request, data: WordRequest):
                     except Exception:
                         n = None
                     if t == typ and n == counters.get(typ, 0) + 1:
-                        # nueva secciÃ³n (pÃ¡gina nueva) con orientaciÃ³n indicada
+                        # nueva sección (página nueva) con orientación indicada
                         new_sec = doc.add_section(WD_SECTION_START.NEW_PAGE)
                         _apply_section_orientation(new_sec, s.get("orientation", "portrait"))
                         # heredar header/footer
                         _set_header_footer(
                             new_sec,
-                            header_cfg,
-                            footer_cfg,
+                            options.get("header", {"right": "Página {PAGE} de {NUMPAGES}"}),
+                            options.get("footer", {"center": ""}),
                             logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
                         )
                         break
@@ -1426,17 +1340,11 @@ def generate_word(request: Request, data: WordRequest):
         file_id = f"{uuid.uuid4()}.docx"
         file_path = os.path.join(RESULT_DIR, file_id)
         doc.save(file_path)
-        return {"url": _result_url(file_id, request)}
+        return {"url": f"/resultados/{file_id}"}
 
     # ===== MODO LEGADO (tu comportamiento anterior) =====
-    data = sanitize(data.dict())  # aquÃ­ sÃ­ sanitizamos como antes
+    data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
-    _set_header_footer(
-        doc.sections[0],
-        {"left": "", "center": "", "right": "PÃ¡gina {PAGE} de {NUMPAGES}"},
-        {"center": DEFAULT_COMPANY_NAME},
-        logo_url=DEFAULT_LOGO_URL, logo_b64=None
-    )
     doc.add_heading(data["titulo"], 0)
     for sec in data["secciones"]:
         doc.add_paragraph(sec)
@@ -1506,7 +1414,7 @@ def generate_ppt(request: Request, data: PowerPointRequest):
             slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title
             if global_bg: _set_background(slide, global_bg)
             # Title / Subtitle
-            slide.shapes.title.text = payload.get("title") or payload.get("titulo") or "PresentaciÃ³n"
+            slide.shapes.title.text = payload.get("title") or payload.get("titulo") or "Presentación"
             if len(slide.placeholders) > 1:
                 slide.placeholders[1].text = payload.get("subtitle", "") or ""
             # estilos
@@ -1578,7 +1486,7 @@ def generate_ppt(request: Request, data: PowerPointRequest):
             elif isinstance(s, dict) and s.get("type") == "chart":
                 slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
                 if global_bg: _set_background(slide, global_bg)
-                slide.shapes.title.text = s.get("title") or "GrÃ¡fico"
+                slide.shapes.title.text = s.get("title") or "Gráfico"
                 _style_title(slide.shapes.title, brand)
 
                 data = CategoryChartData()
@@ -1613,7 +1521,7 @@ def generate_ppt(request: Request, data: PowerPointRequest):
                 _style_body(body, brand)
                 _brand_slide(slide, prs, brand, company_name)
 
-        # Footer (nÃºmeros + fecha)
+        # Footer (números + fecha)
         total = len(prs.slides)
         show_nums = (payload.get("options") or {}).get("slide_numbers", True)
         footer_date = date.today().strftime("%Y-%m-%d")
@@ -1634,8 +1542,8 @@ def generate_ppt(request: Request, data: PowerPointRequest):
         prs.save(file_path)
         return {"url": _result_url(file_id, request)}
 
-    # ======= MODO LEGADO (tu implementaciÃ³n anterior con bullets) =======
-    data = sanitize(data.dict())  # aquÃ­ sÃ­ podemos sanitizar
+    # ======= MODO LEGADO (tu implementación anterior con bullets) =======
+    data = sanitize(data.dict())  # aquí sí podemos sanitizar
     apply_branding = data.get("apply_branding", True)
 
     # normaliza/instancia brand
@@ -1685,7 +1593,7 @@ def generate_ppt(request: Request, data: PowerPointRequest):
             if apply_branding:
                 _brand_slide(slide, prs, brand, company_name)
                 _style_body(body, brand)
-        # nÃºmeros en modo legado
+        # números en modo legado
         if apply_branding:
             total = len(prs.slides)
             for i, sl in enumerate(prs.slides):
@@ -1701,11 +1609,11 @@ def generate_ppt(request: Request, data: PowerPointRequest):
                 )
 
     else:
-        # slide de tÃ­tulo con bullets
+        # slide de título con bullets
         slide = prs.slides.add_slide(prs.slide_layouts[0])
         if apply_branding:
             _set_background(slide, data.get("background") or brand.secondary)
-        slide.shapes.title.text = data.get("titulo") or "PresentaciÃ³n"
+        slide.shapes.title.text = data.get("titulo") or "Presentación"
         if apply_branding:
             _style_title(slide.shapes.title, brand)
 
@@ -1749,7 +1657,7 @@ def generate_pdf(request: Request, data: PDFRequest):
             # WeasyPrint no disponible: avisa claramente
             raise HTTPException(
                 status_code=500,
-                detail='WeasyPrint no estÃ¡ instalado. Agrega "weasyprint" a requirements.txt y reinstala.'
+                detail='WeasyPrint no está instalado. Agrega "weasyprint" a requirements.txt y reinstala.'
             )
 
         payload = data.dict()  # NO sanitizamos para no romper data: URIs ni HTML
