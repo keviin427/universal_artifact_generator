@@ -62,13 +62,13 @@ from docx.shared import Inches as DocxInches, Pt as DocxPt, RGBColor as DocxRGBC
 # PDF
 from fpdf import FPDF
 try:
-    from weasyprint import HTML, CSS  # opcional (si no está, seguimos con FPDF)
+    from weasyprint import HTML, CSS 
 except Exception:
     HTML = None
 
 # SVG/PNG
 try:
-    import cairosvg  # opcional (para exportar PNG desde SVG)
+    import cairosvg  
 except Exception:
     cairosvg = None
     
@@ -297,7 +297,6 @@ class ExcelRequest(BaseModel):
     formulas: Optional[Dict[str, Union[str, List[str]]]] = None
     hojas: Optional[List[Union[Dict[str, List[List]], str]]] = None
 
-# v2 “robusto”
 class ExcelData(BaseModel):
     headers: List[str]
     rows: List[List[Any]]
@@ -321,7 +320,7 @@ class WordRequest(BaseModel):
     tablas: Optional[List[List[List[str]]]] = None
 
     # Modo avanzado
-    template_id: Optional[str] = None  # por ahora no usamos plantillas externas; se ignora si llega
+    template_id: Optional[str] = None  
     placeholders: Optional[Dict[str, Any]] = None
     content: Optional[List[Dict[str, Any]]] = None
     options: Optional[Dict[str, Any]] = None
@@ -347,14 +346,12 @@ class PowerPointSlide(BaseModel):
 
 # Acepta cada item de 'slides' como objeto PowerPointSlide O como string (título suelto)
 class PowerPointRequest(BaseModel):
-    # NUEVO (avanzado)
     template_id: Optional[str] = None
     title: Optional[str] = None
     subtitle: Optional[str] = None
     theme: Optional[Dict[str, Any]] = None
     options: Optional[Dict[str, Any]] = None
 
-    # Brand y estilo global (ya existentes)
     titulo: Optional[str] = None                      # compat con antiguo
     bullets: Optional[List[str]] = []                 # compat
     slides: Optional[List[Union[Dict[str, Any], PowerPointSlide, str]]] = None
@@ -444,7 +441,6 @@ def _add_logo(slide, prs, brand: PPTBrand):
         stream = io.BytesIO(logo_bytes)
         stream.seek(0)
         picture = slide.shapes.add_picture(stream, 0, 0)
-        # escalar manteniendo proporción
         target_height = Inches(0.9)
         scale = target_height / picture.height
         picture.height = target_height
@@ -534,7 +530,6 @@ def _add_page_numbering(paragraph, pattern: str = "Página {PAGE} de {NUMPAGES}"
         paragraph.add_run(parts2[1])
 
 def _clear_section_container(container):
-    """Elimina párrafos/tablas existentes en encabezados o pies antes de reconstruirlos."""
     for tbl in list(container.tables):
         tbl._element.getparent().remove(tbl._element)
     for p in list(container.paragraphs):
@@ -574,7 +569,6 @@ def _set_header_footer(section, header_cfg: Optional[Dict[str, str]], footer_cfg
         run_logo = p_logo.add_run()
         _add_docx_image(run_logo, logo_bytes, width_in=1.6)
 
-    # Watermark simple: texto grande y gris en el encabezado (no “debajo del texto” real, pero visible)
     if watermark_text:
         pw = header.add_paragraph()
         pw.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -710,7 +704,6 @@ def _build_svg_panel(payload: Dict[str, Any], to_png: bool = False):
     primary = theme.get("primary", "#22D3EE")
     text    = theme.get("text", "#E5E7EB")
 
-    # KPIs (hasta 3)
     kpis = (payload.get("kpis") or [])[:3]
     cards = []
     col_w = (w - 96) / 3.0
@@ -972,7 +965,6 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     print_orient   = (print_opts.get("orientation") or "landscape").lower()
     fit_to_width   = int(print_opts.get("fit_to_width", 1))
 
-    # === A partir de aquí es tu lógica original (con pequeños puntos de entrada) ===
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -995,7 +987,6 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         c.fill = header_fill
         c.font = header_font
 
-    # Congelar según options o default branding
     if freeze_addr:
         ws_det.freeze_panes = freeze_addr
     else:
@@ -1024,7 +1015,6 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
         if any(is_number(r[j]) for r in rows if j < len(r)):
             numeric_cols.add(j)
 
-    # Formatos automáticos heurísticos
     currency_headers = {"venta", "ventas", "costo", "costos", "margen", "importe", "monto", "total"}
     percent_headers  = {"%", "porcentaje", "ratio", "margen %"}
     from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE_00
@@ -1133,7 +1123,6 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
     else:
         wb.defined_names.append(dn)
 
-    # ====== Pivot simple (agregado por la primera columna) ======
     try:
         import pandas as pd
         df = pd.DataFrame(rows, columns=headers)
@@ -1208,7 +1197,6 @@ def generate_excel(request: Request, data: Union[ExcelRequestV2, ExcelRequest]):
 
 @app.post("/generate_word")
 def generate_word(data: WordRequest):
-    # MODO AVANZADO: si trae content/placeholders/options, no sanitizamos para no romper URLs ni campos
     if data.content or data.placeholders or data.options or data.template_id:
         placeholders = data.placeholders or {}
         options = data.options or {}
@@ -1260,14 +1248,12 @@ def generate_word(data: WordRequest):
             logo_url=logo_url, logo_b64=logo_b64, watermark_text=wm
         )
 
-        # === Render del contenido con secciones/orientación cuando se requiera ===
         # Mapeo "from": "table:1", "heading:2", etc.
         sec_specs = options.get("sections", []) or []
         # contador por tipo
         counters = {"heading": 0, "paragraph": 0, "table": 0, "list": 0, "image": 0}
         for item in content:
             typ = item.get("type", "paragraph")
-            # ¿debemos insertar break de sección antes de este ítem?
             for s in sec_specs:
                 src = s.get("from")
                 if src and ":" in src:
@@ -1342,7 +1328,6 @@ def generate_word(data: WordRequest):
         doc.save(file_path)
         return {"url": f"/resultados/{file_id}"}
 
-    # ===== MODO LEGADO (tu comportamiento anterior) =====
     data = sanitize(data.dict())  # aquí sí sanitizamos como antes
     doc = Document()
     doc.add_heading(data["titulo"], 0)
@@ -1463,7 +1448,7 @@ def generate_ppt(request: Request, data: PowerPointRequest):
                     Inches(8.4), Inches(0.8 + rows_n * 0.35)
                 ).table
 
-                # encabesados
+                # encabezados
                 for j, h in enumerate(headers):
                     cell = table.cell(0, j)
                     cell.text = str(h)
@@ -1542,7 +1527,6 @@ def generate_ppt(request: Request, data: PowerPointRequest):
         prs.save(file_path)
         return {"url": _result_url(file_id, request)}
 
-    # ======= MODO LEGADO (tu implementación anterior con bullets) =======
     data = sanitize(data.dict())  # aquí sí podemos sanitizar
     apply_branding = data.get("apply_branding", True)
 
