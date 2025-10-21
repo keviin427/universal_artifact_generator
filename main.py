@@ -191,7 +191,7 @@ app.add_middleware(
 RESULT_DIR = "resultados"
 os.makedirs(RESULT_DIR, exist_ok=True)
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
-PDF_BASE_URL = (os.getenv("PDF_BASE_URL") or "https://universal-artifact-generator.onrender.commmmmmmmmm").rstrip("/")
+PDF_BASE_URL = (os.getenv("PDF_BASE_URL") or "https://universal-artifact-generator.onrender.com").rstrip("/")
 
 def _result_url(filename: str, request: Optional[Request] = None) -> str:
     if PUBLIC_BASE_URL:
